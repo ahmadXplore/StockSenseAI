@@ -1,0 +1,3 @@
+"""
+StockSense AI — Database Package
+"""

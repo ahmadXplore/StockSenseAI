@@ -1,0 +1,147 @@
+version: "3.8"
+
+services:
+  # ============================================================
+  # Database (PostgreSQL 15 + TimescaleDB)
+  # ============================================================
+  db:
+    image: timescale/timescaledb:latest-pg15
+    container_name: stocksense_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stocksense}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stocksense_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-stocksense}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stocksense} -d ${POSTGRES_DB:-stocksense}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - stocksense_network
+
+  # ============================================================
+  # Cache & Broker (Redis 7)
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: stocksense_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - stocksense_network
+
+  # ============================================================
+  # FastAPI Backend API
+  # ============================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: stocksense_backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - stocksense_network
+
+  # ============================================================
+  # Celery Worker (Async Analysis Tasks)
+  # ============================================================
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: stocksense_celery_worker
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - stocksense_network
+
+  # ============================================================
+  # Celery Beat (Scheduled Market & Macro Ingestion)
+  # ============================================================
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: stocksense_celery_beat
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app.celery_app beat --loglevel=info
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - stocksense_network
+
+  # ============================================================
+  # Next.js 14 Frontend
+  # ============================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: stocksense_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+    depends_on:
+      - backend
+    networks:
+      - stocksense_network
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+
+networks:
+  stocksense_network:
+    driver: bridge

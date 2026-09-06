@@ -1,0 +1,27 @@
+date,event_type,event_description,sentiment,affected_sectors,market_impact
+2020-03-15,global,COVID-19 Pandemic Lockdowns,negative,All,Major crash
+2020-04-01,economic,SBP cuts interest rate to 9%,positive,"Banking, Real Estate",Positive
+2020-12-31,economic,Year-end recovery from COVID,positive,All,Recovery
+2021-03-15,economic,Economic recovery gains momentum,positive,All,Bull market
+2021-11-15,economic,Inflation starts rising,negative,Consumer goods,Volatility increase
+2022-02-24,global,Russia-Ukraine War begins,negative,"Oil & Gas, Fertilizer",Commodity price surge
+2022-04-01,political,Political crisis and government change,negative,All,Market crash
+2022-06-01,economic,PKR devaluation crisis,negative,Import-dependent sectors,Severe negative
+2022-08-01,natural_disaster,Devastating floods,negative,"Agriculture, Infrastructure",Negative
+2022-11-15,economic,Interest rate peaks at 16%,negative,"Banking, Real Estate",Bear market
+2023-01-15,economic,IMF program uncertainty,negative,All,High volatility
+2023-03-01,economic,Inflation hits 35%+ record high,negative,All,Economic crisis
+2023-06-30,economic,IMF program approved,positive,All,Positive rally
+2023-09-01,economic,Interest rate reaches 22% peak,negative,All,Credit squeeze
+2024-01-15,economic,Inflation starts declining,positive,All,Market optimism
+2024-04-01,economic,SBP begins rate cuts,positive,"Banking, Real Estate",Bull rally begins
+2024-06-15,economic,PKR stabilizes,positive,All,Positive
+2024-09-01,economic,Inflation below 10%,positive,Consumer goods,Positive
+2025-01-15,economic,Economic recovery strengthens,positive,All,Strong bull market
+2025-03-01,economic,Interest rate down to 15%,positive,All,Positive
+2025-06-01,economic,Single-digit inflation achieved,positive,All,Market confidence
+2025-12-01,economic,Strong GDP growth reported,positive,All,Rally continues
+2026-01-15,economic,Further rate cuts expected,positive,All,Positive outlook
+2024-03-15,corporate,Sazgar EV launch success,positive,Automobile,Stock surge
+2023-11-01,corporate,Tech sector IPO boom,positive,Technology,Sector rally
+2024-08-15,corporate,Banking sector profit surge,positive,Banking,Strong returns
