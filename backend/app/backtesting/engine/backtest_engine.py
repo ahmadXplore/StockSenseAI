@@ -23,7 +23,7 @@ from app.backtesting.portfolio.position_manager import Position
 from app.backtesting.costs.transaction_costs import compute_transaction_friction
 from app.backtesting.risk.risk_engine import RiskEngine
 from app.backtesting.corporate_actions.adjustments import process_corporate_action
-from app.backtesting.strategies import create_strategy, BaseStrategy
+from app.backtesting.strategies import create_strategy, BaseStrategy, StrategySignal
 from app.backtesting.evaluation.performance import calculate_performance_metrics
 from app.backtesting.evaluation.benchmark import compute_benchmark_comparison
 from app.backtesting.evaluation.attribution import compute_performance_attribution

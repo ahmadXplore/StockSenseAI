@@ -10,14 +10,16 @@ from sqlalchemy.orm import sessionmaker, Session
 
 from app.core.config import settings
 
+# Engine configuration (conditional on SQLite vs PostgreSQL)
+is_sqlite = "sqlite" in settings.database_url.lower()
+async_kwargs = {"echo": False, "future": True}
+if not is_sqlite:
+    async_kwargs.update({"pool_pre_ping": True, "pool_size": 10, "max_overflow": 20})
+
 # Async Engine for FastAPI async handlers
 async_engine = create_async_engine(
     settings.database_url,
-    echo=False,
-    future=True,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    **async_kwargs,
 )
 
 # Async Session Factory
@@ -29,14 +31,15 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
 )
 
+is_sqlite_sync = "sqlite" in settings.database_url_sync.lower()
+sync_kwargs = {"echo": False, "future": True}
+if not is_sqlite_sync:
+    sync_kwargs.update({"pool_pre_ping": True, "pool_size": 5, "max_overflow": 10})
+
 # Sync Engine for synchronous tasks, Celery workers & migrations
 sync_engine = create_engine(
     settings.database_url_sync,
-    echo=False,
-    future=True,
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
+    **sync_kwargs,
 )
 
 SyncSessionLocal = sessionmaker(

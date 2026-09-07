@@ -7,10 +7,23 @@ Never hard-code credentials or API keys.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _normalize_db_url(url: str) -> str:
+    """Ensure relative SQLite database paths resolve to the backend directory."""
+    if url and "sqlite" in url.lower() and ":///" in url:
+        prefix, path_part = url.split(":///", 1)
+        p = Path(path_part)
+        if not p.is_absolute():
+            backend_dir = Path(__file__).resolve().parent.parent.parent
+            resolved_path = (backend_dir / p).resolve().as_posix()
+            return f"{prefix}:///{resolved_path}"
+    return url
 
 
 class Settings(BaseSettings):
@@ -41,6 +54,7 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     database_url: str = ""
     database_url_sync: str = ""
+    sync_database_url: str = ""
 
     # ---- Redis ----
     redis_host: str = "redis"
@@ -57,6 +71,8 @@ class Settings(BaseSettings):
     finnhub_api_key: str = ""
     fred_api_key: str = ""
     sec_user_agent: str = "StockSenseAI admin@example.com"
+    sec_edgar_user_agent: str = ""
+    grok_api_key: str = ""
 
     # ---- JWT Auth ----
     jwt_secret_key: str = "CHANGE_ME_TO_ANOTHER_RANDOM_STRING"
@@ -75,7 +91,7 @@ class Settings(BaseSettings):
     @classmethod
     def assemble_db_url(cls, v: str, info) -> str:
         if v:
-            return v
+            return _normalize_db_url(v)
         values = info.data
         user = values.get("postgres_user", "stocksense")
         password = values.get("postgres_password", "stocksense_dev_password")
@@ -88,8 +104,10 @@ class Settings(BaseSettings):
     @classmethod
     def assemble_db_url_sync(cls, v: str, info) -> str:
         if v:
-            return v
+            return _normalize_db_url(v)
         values = info.data
+        if values.get("sync_database_url"):
+            return _normalize_db_url(values.get("sync_database_url"))
         user = values.get("postgres_user", "stocksense")
         password = values.get("postgres_password", "stocksense_dev_password")
         host = values.get("postgres_host", "db")

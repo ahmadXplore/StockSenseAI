@@ -3,7 +3,7 @@ StockSense AI — Look-Ahead Bias & Information Leakage Guard
 Asserts that no price, feature, prediction, or corporate action from future timestamp (T > t) influences decisions at time t.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 
 class LookaheadAuditException(Exception):

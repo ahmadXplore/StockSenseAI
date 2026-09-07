@@ -39,13 +39,10 @@ async def lifespan(app: FastAPI):
                     await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {s};"))
             # Auto-create tables in development mode
             if settings.is_development:
-                # Add schema-stripping listener for SQLite engine
+                # Strip schema for SQLite compatibility
                 if "sqlite" in settings.database_url.lower():
-                    from sqlalchemy import event, Table
-                    @event.listens_for(Table, "before_create")
-                    def remove_schema_for_sqlite(target, connection, **kw):
-                        if connection.dialect.name == "sqlite":
-                            target.schema = None
+                    for table in Base.metadata.tables.values():
+                        table.schema = None
                 await conn.run_sync(Base.metadata.create_all)
             
             # Ensure new columns on portfolio.users exist (idempotent ALTER TABLE)
