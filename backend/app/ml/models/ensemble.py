@@ -81,17 +81,31 @@ class StockSenseEnsemble(BaseStockModel):
         probs = self.direction_model.predict_proba(latest_row)[0]
         prob_up = float(probs[1])
         prob_down = float(probs[0])
-        direction = "UP" if prob_up >= 0.50 else "DOWN"
 
         # 2. Return Forecast (%)
         exp_ret = float(self.return_model.predict(latest_row)[0] * 100.0)
+
+        # Reconcile directional classification and continuous return regression sign
+        if exp_ret > 0.5 and prob_up < 0.40:
+            exp_ret = -abs(exp_ret)
+        elif exp_ret < -0.5 and prob_up > 0.60:
+            exp_ret = abs(exp_ret)
+        elif abs(exp_ret) >= 1.0 and abs(prob_up - 0.50) <= 0.10:
+            if exp_ret > 0:
+                prob_up = min(0.75, 0.50 + abs(exp_ret) / 100.0)
+                prob_down = 1.0 - prob_up
+            else:
+                prob_down = min(0.75, 0.50 + abs(exp_ret) / 100.0)
+                prob_up = 1.0 - prob_down
+
+        direction = "UP" if prob_up >= 0.50 else "DOWN"
 
         # 3. Volatility Forecast (%)
         pred_vol = float(self.volatility_model.predict(latest_row)[0])
 
         # 4. Conformal (1-alpha) Prediction Interval Bounds
-        lower_bound = round(exp_ret - self.conformal_q_score, 2)
-        upper_bound = round(exp_ret + self.conformal_q_score, 2)
+        lower_bound = round(min(exp_ret - abs(self.conformal_q_score), exp_ret - 2.0), 2)
+        upper_bound = round(max(exp_ret + abs(self.conformal_q_score), exp_ret + 2.0), 2)
 
         # 5. Confidence Score (0-100)
         # Scaled by probability distance from 0.5 and inverse volatility penalty

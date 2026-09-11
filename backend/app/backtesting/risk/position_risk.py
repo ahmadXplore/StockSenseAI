@@ -1,9 +1,18 @@
 """
 StockSense AI — Position Risk & Exit Decision Engine
 Evaluates position-level stop-loss, trailing stops, profit targets, time stops, volatility exits, and prediction reversals.
+
+Priority Order (strict):
+    1. Hard Stop-Loss (highest priority — overrides all other exits)
+    2. Take Profit
+    3. Trailing Stop
+    4. Time Stop
+    5. Volatility Stop
+    6. Fundamental Thesis Exit
+    7. AI Prediction Reversal (lowest priority)
 """
 
-from typing import Optional, Tuple
+from typing import Optional
 from app.backtesting.schemas import ExitReason, PositionSide
 from app.backtesting.portfolio.position_manager import Position
 
@@ -32,6 +41,9 @@ def evaluate_position_exits(
 ) -> PositionExitSignal:
     """
     Evaluates all exit conditions against the current price bar for an open position.
+
+    Priority: Stop-Loss > Take-Profit > Trailing-Stop > Time-Stop > Volatility-Stop > Thesis > AI Reversal
+    This ordering ensures the 10% hard stop-loss is never overridden by softer exits.
     """
     if position.shares <= 0:
         return PositionExitSignal(False)
@@ -39,55 +51,119 @@ def evaluate_position_exits(
     position.bars_held += 1
     position.update_price_extremes(current_high, current_low)
 
-    # 1. Update dynamic trailing stop
+    # ──────────────────────────────────────────────────
+    # PRIORITY 1: Hard Stop-Loss (highest priority gate)
+    # Must be evaluated FIRST — overrides all other exits.
+    # ──────────────────────────────────────────────────
+    if position.stop_loss_price is not None:
+        if position.side == PositionSide.LONG and current_low <= position.stop_loss_price:
+            return PositionExitSignal(
+                True,
+                ExitReason.STOP_LOSS,
+                f"[STOP LOSS OVERRIDE] Hard stop-loss breached: low ${current_low:.2f} ≤ stop ${position.stop_loss_price:.2f} "
+                f"(Entry ${position.average_entry_price:.2f}, Loss={((position.stop_loss_price - position.average_entry_price) / position.average_entry_price):.1%})"
+            )
+        elif position.side == PositionSide.SHORT and current_high >= position.stop_loss_price:
+            return PositionExitSignal(
+                True,
+                ExitReason.STOP_LOSS,
+                f"[STOP LOSS OVERRIDE] Hard stop-loss breached: high ${current_high:.2f} ≥ stop ${position.stop_loss_price:.2f} "
+                f"(Entry ${position.average_entry_price:.2f}, Loss={((position.average_entry_price - position.stop_loss_price) / position.average_entry_price):.1%})"
+            )
+
+    # ──────────────────────────────────────────────────
+    # PRIORITY 2: Take Profit Target
+    # ──────────────────────────────────────────────────
+    if position.take_profit_price is not None:
+        if position.side == PositionSide.LONG and current_high >= position.take_profit_price:
+            return PositionExitSignal(
+                True,
+                ExitReason.TAKE_PROFIT,
+                f"[TAKE PROFIT] Target reached: high ${current_high:.2f} ≥ target ${position.take_profit_price:.2f} "
+                f"(Entry ${position.average_entry_price:.2f}, Gain={((position.take_profit_price - position.average_entry_price) / position.average_entry_price):.1%})"
+            )
+        elif position.side == PositionSide.SHORT and current_low <= position.take_profit_price:
+            return PositionExitSignal(
+                True,
+                ExitReason.TAKE_PROFIT,
+                f"[TAKE PROFIT] Target reached: low ${current_low:.2f} ≤ target ${position.take_profit_price:.2f} "
+                f"(Entry ${position.average_entry_price:.2f}, Gain={((position.average_entry_price - position.take_profit_price) / position.average_entry_price):.1%})"
+            )
+
+    # ──────────────────────────────────────────────────
+    # PRIORITY 3: Update & check Trailing Stop
+    # ──────────────────────────────────────────────────
     if trailing_stop_atr_mult and current_atr and current_atr > 0:
         if position.side == PositionSide.LONG:
             trail_level = position.highest_price_seen - (trailing_stop_atr_mult * current_atr)
             if position.trailing_stop_price is None or trail_level > position.trailing_stop_price:
                 position.trailing_stop_price = round(trail_level, 4)
-        else: # SHORT
+        else:  # SHORT
             trail_level = position.lowest_price_seen + (trailing_stop_atr_mult * current_atr)
             if position.trailing_stop_price is None or trail_level < position.trailing_stop_price:
                 position.trailing_stop_price = round(trail_level, 4)
 
-    # 2. Check Hard Stop Loss
-    if position.stop_loss_price is not None:
-        if position.side == PositionSide.LONG and current_low <= position.stop_loss_price:
-            return PositionExitSignal(True, ExitReason.STOP_LOSS, f"Hard stop-loss breached at ${position.stop_loss_price:.2f}")
-        elif position.side == PositionSide.SHORT and current_high >= position.stop_loss_price:
-            return PositionExitSignal(True, ExitReason.STOP_LOSS, f"Hard stop-loss breached at ${position.stop_loss_price:.2f}")
-
-    # 3. Check Trailing Stop
     if position.trailing_stop_price is not None:
         if position.side == PositionSide.LONG and current_low <= position.trailing_stop_price:
-            return PositionExitSignal(True, ExitReason.TRAILING_STOP, f"Trailing stop triggered at ${position.trailing_stop_price:.2f}")
+            return PositionExitSignal(
+                True,
+                ExitReason.TRAILING_STOP,
+                f"[TRAILING STOP] Triggered: low ${current_low:.2f} ≤ trail ${position.trailing_stop_price:.2f} "
+                f"(Peak ${position.highest_price_seen:.2f})"
+            )
         elif position.side == PositionSide.SHORT and current_high >= position.trailing_stop_price:
-            return PositionExitSignal(True, ExitReason.TRAILING_STOP, f"Trailing stop triggered at ${position.trailing_stop_price:.2f}")
+            return PositionExitSignal(
+                True,
+                ExitReason.TRAILING_STOP,
+                f"[TRAILING STOP] Triggered: high ${current_high:.2f} ≥ trail ${position.trailing_stop_price:.2f} "
+                f"(Trough ${position.lowest_price_seen:.2f})"
+            )
 
-    # 4. Check Take Profit
-    if position.take_profit_price is not None:
-        if position.side == PositionSide.LONG and current_high >= position.take_profit_price:
-            return PositionExitSignal(True, ExitReason.TAKE_PROFIT, f"Take profit target reached at ${position.take_profit_price:.2f}")
-        elif position.side == PositionSide.SHORT and current_low <= position.take_profit_price:
-            return PositionExitSignal(True, ExitReason.TAKE_PROFIT, f"Take profit target reached at ${position.take_profit_price:.2f}")
-
-    # 5. Check Time Stop
+    # ──────────────────────────────────────────────────
+    # PRIORITY 4: Time Stop
+    # ──────────────────────────────────────────────────
     if time_stop_bars and position.bars_held >= time_stop_bars:
-        return PositionExitSignal(True, ExitReason.TIME_STOP, f"Time stop reached after {position.bars_held} bars")
+        return PositionExitSignal(
+            True,
+            ExitReason.TIME_STOP,
+            f"[TIME STOP] Max holding period reached: {position.bars_held} bars ≥ limit {time_stop_bars} bars"
+        )
 
-    # 6. Check Volatility Stop
+    # ──────────────────────────────────────────────────
+    # PRIORITY 5: Volatility Stop
+    # ──────────────────────────────────────────────────
     if volatility_stop_threshold and current_volatility and current_volatility > volatility_stop_threshold:
-        return PositionExitSignal(True, ExitReason.VOLATILITY_STOP, f"Volatility stop triggered: {current_volatility:.2%} > threshold {volatility_stop_threshold:.2%}")
+        return PositionExitSignal(
+            True,
+            ExitReason.VOLATILITY_STOP,
+            f"[VOLATILITY STOP] Realized vol {current_volatility:.2%} > threshold {volatility_stop_threshold:.2%}"
+        )
 
-    # 7. Check Fundamental Thesis Exit
+    # ──────────────────────────────────────────────────
+    # PRIORITY 6: Fundamental Thesis Exit
+    # ──────────────────────────────────────────────────
     if check_thesis and fundamental_health_score is not None and fundamental_health_score < 40.0:
-        return PositionExitSignal(True, ExitReason.THESIS_EXIT, f"Fundamental thesis deteriorated (health score: {fundamental_health_score:.1f}/100)")
+        return PositionExitSignal(
+            True,
+            ExitReason.THESIS_EXIT,
+            f"[THESIS EXIT] Fundamental health deteriorated to {fundamental_health_score:.1f}/100 (threshold: 40)"
+        )
 
-    # 8. Check AI Prediction Reversal
+    # ──────────────────────────────────────────────────
+    # PRIORITY 7: AI Prediction Reversal (lowest priority)
+    # ──────────────────────────────────────────────────
     if check_prediction_reversal and current_ai_probability_up is not None:
         if position.side == PositionSide.LONG and current_ai_probability_up < 0.40:
-            return PositionExitSignal(True, ExitReason.PREDICTION_REVERSAL, f"AI probability reversed to bearish (P(up) = {current_ai_probability_up:.2%})")
+            return PositionExitSignal(
+                True,
+                ExitReason.PREDICTION_REVERSAL,
+                f"[AI REVERSAL] AI probability turned bearish: P(up)={current_ai_probability_up:.2%} < 40% threshold"
+            )
         elif position.side == PositionSide.SHORT and current_ai_probability_up > 0.60:
-            return PositionExitSignal(True, ExitReason.PREDICTION_REVERSAL, f"AI probability reversed to bullish (P(up) = {current_ai_probability_up:.2%})")
+            return PositionExitSignal(
+                True,
+                ExitReason.PREDICTION_REVERSAL,
+                f"[AI REVERSAL] AI probability turned bullish: P(up)={current_ai_probability_up:.2%} > 60% threshold"
+            )
 
     return PositionExitSignal(False)

@@ -88,6 +88,7 @@ def compute_transaction_friction(
     comm_pct = config.commission_pct if config else 0.001
     comm_per_share = config.commission_per_share if config else 0.0
     min_comm = config.min_commission if config else 0.0
+    enable_commissions = config.enable_broker_commissions if config else True
 
     commission = calculate_commission(
         trade_value=trade_value,
@@ -96,6 +97,7 @@ def compute_transaction_friction(
         commission_pct=comm_pct,
         commission_per_share=comm_per_share,
         min_commission=min_comm,
+        enable_broker_commissions=enable_commissions,
     )
 
     # 3. Exchange Fee
@@ -104,11 +106,14 @@ def compute_transaction_friction(
 
     # 4. Taxes & Levies
     tax_rate = config.tax_rate_pct if config else 0.0
+    enable_taxation = config.enable_local_taxation if config else True
     taxes = calculate_taxes_and_statutory_fees(
         trade_value=trade_value,
         market_code=market_code,
         side=side,
         custom_tax_rate=tax_rate,
+        shares=shares,
+        enable_local_taxation=enable_taxation,
     )
 
     total_friction = round(slippage_cost + commission + exchange_fee + taxes, 4)

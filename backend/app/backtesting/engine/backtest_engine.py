@@ -49,13 +49,29 @@ class BacktestEngine:
         self.risk_engine = RiskEngine(config)
         self.order_engine = OrderEngine()
         self.execution_engine = ExecutionEngine(config)
-        self.strategy: BaseStrategy = create_strategy(config.strategy_type, config.strategy_params)
-        
-        # State tracking
+
+        # Inject ensemble-specific config params into strategy_params
+        strategy_params = dict(config.strategy_params or {})
+        if config.stop_loss_pct is not None:
+            strategy_params.setdefault("stop_loss_pct", config.stop_loss_pct)
+        if config.take_profit_pct is not None:
+            strategy_params.setdefault("take_profit_pct", config.take_profit_pct)
+        strategy_params.setdefault("ai_weight", 0.50)
+        strategy_params.setdefault("momentum_weight", 0.30)
+        strategy_params.setdefault("fundamental_weight", 0.20)
+        self.strategy: BaseStrategy = create_strategy(config.strategy_type, strategy_params)
+
+        # Core state tracking
         self.trades: List[TradeRecord] = []
         self.equity_curve: List[EquityCurvePoint] = []
         self.pending_orders: List[Order] = []
-        self.trade_entry_signals: Dict[str, Dict[str, Any]] = {} # Map trade/position to entry signal metadata
+        self.trade_entry_signals: Dict[str, Dict[str, Any]] = {}  # security_id -> entry signal metadata
+
+        # Monthly volatility recalibration state
+        self._price_history: Dict[str, List[float]] = {}  # security_id -> recent close history
+        self._monthly_vol_cache: Dict[str, float] = {}  # security_id -> trailing 30d realized vol
+        self._last_recalibration_month: Optional[str] = None  # "YYYY-MM" of last recalibration
+        self._monthly_vol_log: List[Dict[str, Any]] = []  # audit trail of vol recalibrations
 
     def run(self, timeline: List[MarketTimelineBar], security_metadata: Optional[Dict[str, Dict[str, Any]]] = None) -> BacktestResponse:
         """
@@ -83,6 +99,58 @@ class BacktestEngine:
             for sec_id, f_dict in features.items():
                 f_ts = f_dict.get("timestamp", current_date)
                 assert_no_lookahead_leakage(current_date, f_ts, current_date)
+
+            # 1b. Track rolling price history for volatility recalibration
+            for sec_id, p_data in prices.items():
+                c = float(p_data.get("close", 0.0))
+                if c > 0:
+                    if sec_id not in self._price_history:
+                        self._price_history[sec_id] = []
+                    self._price_history[sec_id].append(c)
+                    # Keep only last 63 trading days (~3 months window)
+                    if len(self._price_history[sec_id]) > 63:
+                        self._price_history[sec_id] = self._price_history[sec_id][-63:]
+
+            # 1c. Monthly Volatility Recalibration (AI Confidence Sizing re-evaluation)
+            current_month = current_date[:7]  # "YYYY-MM"
+            if (
+                self.config.monthly_volatility_recalibration
+                and self._last_recalibration_month != current_month
+                and bar_idx > 0  # Skip very first bar
+            ):
+                self._last_recalibration_month = current_month
+                new_vol_cache: Dict[str, float] = {}
+                for sec_id, hist in self._price_history.items():
+                    if len(hist) >= 10:
+                        # Trailing 30d realized vol (annualized from daily log-returns)
+                        window = hist[-min(30, len(hist)):]
+                        if len(window) >= 2:
+                            log_rets = [
+                                np.log(window[i] / window[i - 1])
+                                for i in range(1, len(window))
+                                if window[i - 1] > 0
+                            ]
+                            if log_rets:
+                                daily_vol = float(np.std(log_rets, ddof=1))
+                                annualized_vol = daily_vol * np.sqrt(252)
+                                new_vol_cache[sec_id] = round(annualized_vol, 4)
+
+                if new_vol_cache:
+                    self._monthly_vol_cache = new_vol_cache
+                    avg_pool_vol = round(float(np.mean(list(new_vol_cache.values()))), 4)
+                    self._monthly_vol_log.append({
+                        "date": current_date,
+                        "month": current_month,
+                        "securities_recalibrated": len(new_vol_cache),
+                        "avg_pool_volatility": avg_pool_vol,
+                        "volatility_target": self.config.volatility_target_pct,
+                        "vol_by_security": new_vol_cache,
+                    })
+                    logger.info(
+                        f"[MONTHLY VOL RECAL] {current_month}: "
+                        f"Pool avg σ={avg_pool_vol:.2%}, Target σ={self.config.volatility_target_pct:.2%}, "
+                        f"Securities={len(new_vol_cache)}"
+                    )
 
             # 2. Point-in-time universe resolution (Survivorship-bias-free)
             active_universe = resolve_point_in_time_universe(
@@ -194,7 +262,7 @@ class BacktestEngine:
 
                 if sig.side == OrderSide.BUY and not self.portfolio.has_position(sig.security_id):
                     # Position Sizing
-                    shares_to_buy = self._calculate_position_size(sig, cur_price, current_equity, sec_p.get("atr"))
+                    shares_to_buy = self._calculate_position_size(sig, cur_price, current_equity, sec_p.get("atr"), sig.security_id)
                     if shares_to_buy <= 0:
                         continue
 
@@ -325,9 +393,14 @@ class BacktestEngine:
         signal: StrategySignal,
         current_price: float,
         portfolio_equity: float,
-        atr: Optional[float] = None
+        atr: Optional[float] = None,
+        security_id: Optional[str] = None,
     ) -> float:
-        """Calculates share size based on configured sizing method."""
+        """
+        Calculates share size based on configured sizing method.
+        AI_CONFIDENCE_SIZING: Scales by signal confidence AND monthly localized volatility.
+        If the pool's realized vol exceeds the volatility target, positions are reduced proportionally.
+        """
         if current_price <= 0 or portfolio_equity <= 0:
             return 0.0
 
@@ -339,34 +412,57 @@ class BacktestEngine:
             return pos_cap / current_price
 
         elif self.config.position_sizing == PositionSizingMethod.ATR_RISK and atr and atr > 0:
-            # Risk capital = Equity * Risk_per_trade_pct
-            # Stop distance = 2 * ATR
-            # Shares = Risk capital / Stop distance
+            # Risk capital = Equity × risk_per_trade_pct
+            # Stop distance = stop_loss_pct × price (or 2×ATR if no stop configured)
+            sl_pct = self.config.stop_loss_pct or 0.10
+            stop_dist = max(0.01, sl_pct * current_price if sl_pct > 0 else 2.0 * atr)
             risk_cap = portfolio_equity * self.config.risk_per_trade_pct
-            stop_dist = max(0.01, 2.0 * atr)
             shares = risk_cap / stop_dist
-            # Enforce max position value cap
             if (shares * current_price) > max_cap_per_pos:
                 shares = max_cap_per_pos / current_price
             return shares
 
-        elif self.config.position_sizing == PositionSizingMethod.CONFIDENCE_WEIGHTED:
-            weight = min(self.config.max_position_weight, self.config.max_position_weight * signal.confidence)
-            return (portfolio_equity * weight) / current_price
+        elif self.config.position_sizing in (
+            PositionSizingMethod.CONFIDENCE_WEIGHTED,
+            PositionSizingMethod.AI_CONFIDENCE_SIZING,
+        ):
+            # Base position weight scaled by AI confidence
+            confidence = max(0.05, min(1.0, signal.confidence))
+            base_weight = self.config.max_position_weight * confidence
+
+            # Monthly volatility scaling: reduce size when local vol > target vol
+            vol_scale = 1.0
+            if self.config.monthly_volatility_recalibration and security_id:
+                local_vol = self._monthly_vol_cache.get(security_id)
+                if local_vol and local_vol > 0:
+                    target_vol = self.config.volatility_target_pct or 0.20
+                    # Vol-targeting scalar: scale down when local > target, scale up (capped) when local < target
+                    vol_scale = min(2.0, target_vol / local_vol)
+                    vol_scale = max(0.10, vol_scale)  # Floor at 10% to never fully exit
+
+            adjusted_weight = min(self.config.max_position_weight, base_weight * vol_scale)
+            return (portfolio_equity * adjusted_weight) / current_price
 
         else:
-            # Default fixed capital allocation
-            pos_cap = min(10000.0, max_cap_per_pos)
+            # Default: fixed capital allocation
+            pos_cap = min(portfolio_equity * 0.10, max_cap_per_pos)
             return pos_cap / current_price
 
     def _apply_fill(self, fill: Fill, current_date: str, signal_meta: Optional[Dict[str, Any]]) -> None:
-        """Applies an executed order fill to portfolio state."""
+        """Applies an executed order fill to portfolio state with full stop-loss/take-profit assignment."""
         total_cost = (fill.fill_price * fill.quantity) + fill.total_friction
         self.portfolio.cash.debit_cash(total_cost)
         self.portfolio.ledger.record_friction(current_date, fill.security_id, fill.total_friction)
 
+        # Resolve stop-loss price: use signal's explicit price, else compute from config pct
         stop_loss = signal_meta.get("stop_loss_price") if signal_meta else None
+        if not stop_loss and self.config.stop_loss_pct and self.config.stop_loss_pct > 0:
+            stop_loss = round(fill.fill_price * (1.0 - self.config.stop_loss_pct), 4)
+
+        # Resolve take-profit price: use signal's explicit price, else compute from config pct
         take_profit = signal_meta.get("take_profit_price") if signal_meta else None
+        if not take_profit and self.config.take_profit_pct and self.config.take_profit_pct > 0:
+            take_profit = round(fill.fill_price * (1.0 + self.config.take_profit_pct), 4)
 
         pos = self.portfolio.open_or_add_position(
             security_id=fill.security_id,

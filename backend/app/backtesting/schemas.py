@@ -94,6 +94,7 @@ class PositionSizingMethod(str, Enum):
     KELLY_CRITERION = "KELLY_CRITERION"
     FRACTIONAL_KELLY = "FRACTIONAL_KELLY"
     CONFIDENCE_WEIGHTED = "CONFIDENCE_WEIGHTED"
+    AI_CONFIDENCE_SIZING = "AI_CONFIDENCE_SIZING"  # Alias: AI confidence-weighted with monthly volatility recalibration
 
 
 class SlippageModelType(str, Enum):
@@ -158,16 +159,24 @@ class BacktestConfig(BaseModel):
     max_positions: int = Field(10, ge=1, le=200)
     
     # Risk Management & Exits
-    stop_loss_pct: Optional[float] = Field(0.05, description="Default percentage stop-loss (e.g. 0.05 = 5%)")
+    stop_loss_pct: Optional[float] = Field(0.10, description="Hard stop-loss percentage (0.10 = 10%). Overrides all other exits with priority.")
     stop_loss_atr_mult: Optional[float] = Field(2.0, description="ATR multiplier for dynamic stop-loss")
-    take_profit_pct: Optional[float] = Field(0.15, description="Take-profit target percentage")
-    take_profit_levels: Optional[List[float]] = Field(None, description="Multi-stage profit targets")
+    take_profit_pct: Optional[float] = Field(0.30, description="Take-profit target percentage (0.30 = 30%)")
+    risk_reward_ratio: Optional[float] = Field(3.0, description="Risk/Reward ratio target (e.g. 3.0 = 1:3)")
+    take_profit_levels: Optional[List[float]] = Field(None, description="Multi-stage profit targets (e.g. [0.15, 0.25, 0.30])")
     trailing_stop_atr_mult: Optional[float] = Field(1.5, description="Trailing stop ATR multiplier")
     time_stop_bars: Optional[int] = Field(None, description="Max holding period in bars")
     volatility_stop_threshold: Optional[float] = Field(None, description="Max annualized volatility before exit")
     fundamental_thesis_exit: bool = Field(True, description="Exit when fundamental rating deteriorates")
     prediction_reversal_exit: bool = Field(True, description="Exit when AI probability reverses")
-    
+
+    # Monthly Volatility Recalibration (AI Confidence Sizing)
+    monthly_volatility_recalibration: bool = Field(True, description="Re-evaluate AI Confidence Sizing monthly based on localized 30d realized volatility")
+    volatility_target_pct: float = Field(0.20, description="Target annualized volatility for position scaling (0.20 = 20%)")
+
+    # Macro Conditioning Labels
+    macro_conditioning: Optional[List[str]] = Field(None, description="Macro regimes to annotate results (e.g. ['Post-Pandemic', 'Rate-Hike Cycle'])")
+
     # Portfolio Allocation & Rebalancing
     allocation_method: AllocationMethod = Field(AllocationMethod.EQUAL_WEIGHT)
     rebalance_frequency: RebalanceFrequency = Field(RebalanceFrequency.MONTHLY)
@@ -187,7 +196,9 @@ class BacktestConfig(BaseModel):
     min_commission: float = Field(1.0, ge=0)
     exchange_fee_pct: float = Field(0.0002, ge=0)
     tax_rate_pct: float = Field(0.0, ge=0, description="Transaction tax or withholding tax rate")
-    
+    enable_broker_commissions: bool = Field(True, description="Enable market-specific broker commissions")
+    enable_local_taxation: bool = Field(True, description="Enable local statutory taxes (SEC fee, CVT, Stamp Duty)")
+
     # Corporate Actions & Adjustments
     dividend_handling: str = Field("REINVEST", description="'REINVEST' or 'CASH'")
     apply_splits: bool = Field(True)

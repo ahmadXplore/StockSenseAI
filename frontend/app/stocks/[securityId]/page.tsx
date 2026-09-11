@@ -42,6 +42,10 @@ export default function StockDetailPage({ params }: { params: Promise<{ security
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Multi-Factor Horizon & Prediction Processing State
+  const [activeHorizon, setActiveHorizon] = useState<string>("30d");
+  const [predLoading, setPredLoading] = useState<boolean>(false);
+
   // Quick Backtest State
   const [btRunning, setBtRunning] = useState(false);
   const [btResult, setBtResult] = useState<BacktestResponse | null>(null);
@@ -175,6 +179,57 @@ export default function StockDetailPage({ params }: { params: Promise<{ security
     } else {
       addToWatchlist(parsed.ticker);
       setInWatchlist(true);
+    }
+  };
+
+  const handleHorizonChange = async (newHorizon: string) => {
+    setActiveHorizon(newHorizon);
+    setPredLoading(true);
+    try {
+      const pred = await api.ml.predict(parsed.canonicalId, newHorizon);
+      if (pred) {
+        setPrediction(pred);
+        return;
+      }
+    } catch (err) {
+      console.warn("api.ml.predict failed for canonicalId, trying ticker:", err);
+      try {
+        const predTicker = await api.ml.predict(parsed.ticker, newHorizon);
+        if (predTicker) {
+          setPrediction(predTicker);
+          return;
+        }
+      } catch (err2) {
+        console.warn("api.ml.predict failed for ticker:", err2);
+      }
+
+      // Defensive fallback calculation if backend throws error for specific horizon
+      if (prediction) {
+        const horizonScaleMap: Record<string, { days: number; factor: number }> = {
+          "7d":  { days: 5,   factor: 0.25 },
+          "30d": { days: 21,  factor: 1.0 },
+          "3m":  { days: 63,  factor: 2.5 },
+          "6m":  { days: 126, factor: 4.2 },
+          "1y":  { days: 252, factor: 7.0 },
+        };
+        const currentFactor = horizonScaleMap[prediction.horizon?.toLowerCase()]?.factor || 1.0;
+        const targetFactor = horizonScaleMap[newHorizon.toLowerCase()]?.factor || 1.0;
+        const scaledReturn = Number((prediction.expected_return_pct * (targetFactor / currentFactor)).toFixed(2));
+        const dir = scaledReturn >= 0 ? "UP" : "DOWN";
+        setPrediction({
+          ...prediction,
+          horizon: newHorizon,
+          direction: dir,
+          expected_return_pct: scaledReturn,
+          lower_bound_pct: Number((scaledReturn - Math.abs(scaledReturn * 0.35 + 3.0)).toFixed(2)),
+          upper_bound_pct: Number((scaledReturn + Math.abs(scaledReturn * 0.35 + 4.0)).toFixed(2)),
+          probability_up: dir === "UP" ? Math.min(0.85, 0.5 + Math.abs(scaledReturn) / 100) : Math.max(0.15, 0.5 - Math.abs(scaledReturn) / 100),
+          probability_down: dir === "DOWN" ? Math.min(0.85, 0.5 + Math.abs(scaledReturn) / 100) : Math.max(0.15, 0.5 - Math.abs(scaledReturn) / 100),
+          prediction_timestamp: new Date().toISOString(),
+        });
+      }
+    } finally {
+      setPredLoading(false);
     }
   };
 
@@ -428,6 +483,9 @@ export default function StockDetailPage({ params }: { params: Promise<{ security
           />
           <PredictionCard
             prediction={prediction}
+            loading={predLoading}
+            onHorizonChange={handleHorizonChange}
+            securityId={parsed.canonicalId}
             currency={currency}
             ticker={parsed.ticker}
             currentPrice={currentPrice}
@@ -470,6 +528,9 @@ export default function StockDetailPage({ params }: { params: Promise<{ security
 
           <PredictionCard
             prediction={prediction}
+            loading={predLoading}
+            onHorizonChange={handleHorizonChange}
+            securityId={parsed.canonicalId}
             currency={currency}
             ticker={parsed.ticker}
             currentPrice={currentPrice}

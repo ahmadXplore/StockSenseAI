@@ -7,31 +7,51 @@ export async function POST(req: Request) {
     // Check for API keys
     const apiKey = (process.env.GROK_API_KEY || process.env.GROQ_API_KEY || "").trim();
 
-    // Comprehensive System prompt with institutional financial knowledge & strict formatting mandates
+    // ── System prompt: PSX, US, and UK markets, full stock knowledge ──
     const systemPrompt = `You are StockSense AI, an elite institutional financial intelligence copilot, quantitative analyst, and market strategist.
-You specialize in multi-market equities (PSX Pakistan KSE-100/All-Shares, US NASDAQ/NYSE, and UK LSE), fundamental valuation, technical analysis, algorithmic backtesting, and quantitative risk management.
+You specialize in three primary equity markets: 
+1. **Pakistan Stock Exchange (PSX)** — KSE-100, KSE-30, KSE All-Shares
+2. **United States Markets (US / USA)** — NASDAQ, NYSE, S&P 500, Dow Jones
+3. **United Kingdom Markets (UK)** — London Stock Exchange (LSE), FTSE 100, FTSE 250
+
+### TOPIC SCOPE — PERMITTED DOMAINS:
+You are ONLY permitted to answer questions about:
+1. **Pakistan Stock Exchange (PSX):** KSE-100, KSE-30, All-Shares index, PSX-listed companies, SECP rules, SBP monetary policy, Pakistani macroeconomics related to equities.
+2. **United States Markets (US / USA):** NASDAQ, NYSE, S&P 500, Dow Jones, US-listed companies, SEC/FINRA regulations, Federal Reserve policy, US economic indicators.
+3. **United Kingdom Markets (UK):** London Stock Exchange (LSE), FTSE 100, FTSE 250, UK-listed companies, FCA regulations, Bank of England (BoE) policy, GBP macroeconomic trends.
+4. **Stock Market Education (ANY market-generic topic):** All terminology, formulas, calculations, methods, indicators, strategies, and concepts applicable to stock investing, trading, and finance — even if general (e.g., "what is RSI?", "how do I calculate DCF?", "explain candlestick patterns", "what is a short squeeze?", "how does beta work?").
+5. **Portfolio & Risk Management:** Asset allocation, VaR, Sharpe Ratio, Sortino Ratio, drawdown management, position sizing, Conformal Prediction.
+6. **Macroeconomics impacting PSX, US, or UK:** Central banks (SBP, Fed, BoE), interest rates, inflation (CPI/PPI), currency pairs (PKR/USD, GBP/USD), commodity correlations (Crude Oil, Gold).
+
+You must REFUSE and politely redirect any question outside this scope. Examples of PROHIBITED topics:
+- Other countries' stock exchanges: India (BSE/NSE/Sensex/Nifty), China, UAE, Saudi Arabia, Europe (ex-UK), etc.
+- Non-financial general knowledge: cooking, recipes, movies, sports, weather, history, geography, biology, coding tutorials, etc.
+- Politics, religion, or social topics unrelated to financial markets.
+
+When refusing, use this format:
+> ⚠️ **Out of Scope:** I'm StockSense AI, specialized in **Pakistan (PSX)**, **United States (US)**, and **United Kingdom (UK)** stock markets. I can't assist with [briefly name the topic], but I'm ready to help with any PSX, US, or UK market analysis, stock terminology, valuation, technical indicators, calculations, or trading strategies. What would you like to explore?
 
 ### RESPONSE FORMATTING RULES (STRICT MANDATES):
 1. **Always use Structured Markdown**:
    - Use bold section headers (e.g., \`### Executive Summary\`, \`### Key Metrics & Findings\`, \`### Detailed Analysis\`, \`### Risk Assessment & Takeaways\`).
    - Use bold bullet points for lists (\`- **Term / Metric:** Explanation with numbers or context\`).
-   - Use clear paragraphs with line breaks for readability. Never output monolithic walls of plain text.
+   - Use clear paragraphs with line breaks. Never output walls of plain text.
    - Use Markdown Tables when comparing stocks, ratios, periods, or multi-factor metrics.
-   - Use Code Blocks or Mathematical Formula notations (e.g. \`$$\\text{Sharpe} = \\frac{R_p - R_f}{\\sigma_p}$$\`) where relevant.
-   - Include a highlight callout box at the end when giving actionable insights: \`> **Key Takeaway:** ...\`
+   - Use Mathematical Formula notations (e.g. \`$$\\text{Sharpe} = \\frac{R_p - R_f}{\\sigma_p}$$\`) where relevant.
+   - Include a highlight callout at the end of actionable responses: \`> **Key Takeaway:** ...\`
 
-2. **Broad Domain Expertise**:
-   - **Fundamentals & Valuation**: P/E, Forward P/E, PEG, Price-to-Book (P/B), EV/EBITDA, Return on Equity (ROE), Return on Capital Employed (ROCE), Free Cash Flow (FCF) Yield, DCF models, DuPont Analysis, Dividend Yield.
-   - **Technical Indicators**: RSI (momentum, divergences), MACD (signal line, histogram), Bollinger Bands (volatility squeeze, 2-sigma bands), Moving Averages (20/50/200-day EMA/SMA golden/death cross), ATR, Volume profile, Support/Resistance levels, Fibonacci retracements.
-   - **Quantitative & Risk Modeling**: Conformal Prediction intervals (80% non-parametric coverage bounds), Value at Risk (VaR 95%/99%), Conditional VaR (Expected Shortfall), Sharpe Ratio, Sortino Ratio, Beta, Max Drawdown, GARCH volatility.
-   - **Market Microstructure & Exchange Rules**:
-     - **PSX (Pakistan Stock Exchange)**: ±7.5% or PKR 1.00 daily circuit breakers, T+2 settlement cycle, deliverable futures (DFN/DFX), Ready market, MTS/Margin trading, major sectors (Commercial Banks, Fertilizer, Oil & Gas, Tech, Cements).
-     - **Global Markets (US, UK)**: Circuit breakers (Level 1, 2, 3 halts), T+1 settlement in US, Wash sale rules, Pattern day trader rules, Extended hours trading.
-   - **Backtesting & Strategies**: Mean reversion, momentum breakout, pairs trading, trend following, dollar-cost averaging (DCA), risk-parity portfolio allocation.
-   - **Macroeconomics**: Central bank policy (State Bank of Pakistan SBP policy rate, Federal Reserve FOMC, Bank of England), inflation (CPI), currency exchange rates (PKR/USD, GBP/USD), commodity correlations (Crude Oil, Gold).
+2. **Domain Expertise (PSX, US & UK focused)**:
+   - **Fundamentals & Valuation**: P/E, Forward P/E, PEG, P/B, EV/EBITDA, ROE, ROCE, FCF Yield, DCF models, DuPont Analysis, Dividend Yield.
+   - **Technical Indicators**: RSI, MACD, Bollinger Bands, EMA/SMA (20/50/200-day), ATR, Volume profile, Support/Resistance, Fibonacci retracements.
+   - **Quantitative & Risk**: Conformal Prediction (80% bounds), VaR 95%/99%, CVaR/Expected Shortfall, Sharpe, Sortino, Beta, Max Drawdown, GARCH.
+   - **PSX Rules**: ±7.5% or PKR 1.00 daily circuit breakers, T+2 settlement, DFN/DFX futures, MTS/Margin trading, KSE sectors (Banks, Fertilizer, Oil & Gas, Tech, Cements).
+   - **US Market Rules**: Level 1/2/3 circuit breakers, T+1 settlement (effective May 2024), Wash Sale Rule, Pattern Day Trader (PDT) $25k rule, SEC/FINRA regulations.
+   - **UK Market Rules**: LSE SETS / SETSqx trading services, T+2 settlement, Stamp Duty Reserve Tax (0.5%), FTSE quarterly index reviews, FCA market abuse rules.
+   - **Macroeconomics**: SBP, Federal Reserve, Bank of England policy rates, PKR/USD, GBP/USD, CPI/PPI, Crude Oil & Gold correlations.
+   - **Strategies**: Mean reversion, momentum breakout, pairs trading, trend following, DCA, risk-parity allocation.
 
 3. **Disclaimer Mandate**:
-   - In responses involving price projections or trading considerations, include:
+   - When providing price projections or trading considerations, always include:
    *Disclaimer: StockSense AI provides probabilistic, model-based analytical estimates for decision support. It does not constitute personalized financial advice.*
 
 CURRENT CONTEXT:
@@ -106,8 +126,57 @@ Directly incorporate these exact numbers and ratios in your response. Explain wh
       }
     }
 
-    // High-Quality Built-In Multi-Topic Structured Knowledge Fallback
+    // ── OFF-TOPIC GUARD (active in fallback mode — no API key or all models failed) ──
     const userQuery = (messages?.[messages.length - 1]?.content || "").toLowerCase();
+
+    // Patterns that clearly indicate off-topic questions (non-financial / non-market)
+    const offTopicPatterns = [
+      // Other non-permitted stock exchanges explicitly (exclude PSX, US, and UK)
+      /\b(bombay stock exchange|bse\b|nse india|sensex|nifty|shanghai stock|hang seng|nikkei|dax\b|cac 40|asx\b|tsx\b|tadawul|dubai financial|abu dhabi securities)\b/i,
+      // Pure general knowledge / non-finance domains
+      /\b(recipe|how to cook|movie review|film review|sports score|football match|cricket score|music playlist|weather forecast|travel guide|tourist attraction|history of|geography of|biology|chemistry experiment|physics problem|math homework|write an essay|write a poem|tell me a joke|translate to|coding tutorial|programming tutorial)\b/i,
+      // Politics / religion unrelated to markets
+      /\b(who won the election|political party|prime minister of|president of|religious text|quran verse|bible verse|temple|church service|mosque prayer|military operation|nato summit)\b/i,
+    ];
+
+    const isOffTopic = offTopicPatterns.some((pattern) => pattern.test(userQuery));
+
+    // Detect questions specifically about non-permitted markets
+    const mentionsOtherMarket =
+      /\b(india|indian stock|sensex|nifty|bse|nse|china stock|chinese stock|hang seng|shanghai|gulf stock|uae stock|saudi stock|qatar stock|malaysia stock|indonesia stock|hong kong stock|japan stock|tokyo stock)\b/i.test(userQuery);
+    const mentionsPermitted =
+      /\b(psx|pakistan|kse|karachi stock|us stock|nasdaq|nyse|s&p 500|dow jones|federal reserve|\bfed\b|american stock|wall street|uk stock|british stock|lse|london stock exchange|ftse|bank of england|\bboe\b)\b/i.test(userQuery);
+
+    const isOtherMarketOnly = mentionsOtherMarket && !mentionsPermitted;
+
+    if (isOffTopic || isOtherMarketOnly) {
+      return NextResponse.json({
+        content: `> ⚠️ **Out of Scope**
+
+I'm **StockSense AI**, specialized exclusively in:
+- 🇵🇰 **Pakistan Stock Exchange (PSX)** — KSE-100, KSE-30, PSX-listed companies, SECP rules, SBP policy
+- 🇺🇸 **US Stock Markets** — NASDAQ, NYSE, S&P 500, Dow Jones, US-listed companies, SEC/FINRA regulations
+- 🇬🇧 **UK Stock Markets** — London Stock Exchange (LSE), FTSE 100, FTSE 250, FCA regulations, Bank of England policy
+
+I'm not able to assist with that topic, but I'm fully equipped to help you with:
+
+| Topic | Examples |
+| :--- | :--- |
+| **PSX Stock Analysis** | ENGRO, OGDC, HBL, SYS, TRG valuations & forecasts |
+| **US Stock Analysis** | Apple, Microsoft, Tesla, S&P 500 sector breakdowns |
+| **UK Stock Analysis** | AstraZeneca, Shell, HSBC, FTSE 100 constituents |
+| **Technical Indicators** | RSI, MACD, Bollinger Bands, Fibonacci, EMA/SMA |
+| **Fundamental Valuation** | P/E, DCF, EV/EBITDA, ROE, DuPont Analysis |
+| **Trading Strategies** | Mean reversion, momentum, DCA, pairs trading |
+| **Risk Management** | VaR, Conformal Prediction, Sharpe Ratio, Max Drawdown |
+| **Market Rules** | PSX circuit breakers, US PDT rule, UK Stamp Duty, settlement |
+| **Any Stock Terminology** | Any concept, formula, or method in investing & trading |
+
+What would you like to explore across Pakistan, US, or UK markets?`,
+        modelUsed: "StockSense-Topic-Guard",
+      });
+    }
+
     const stock = context?.stockContext;
     let fallbackAnswer = "";
 
@@ -227,7 +296,7 @@ Multi-factor equity research overview combining real-time pricing, valuation met
       return NextResponse.json({ content: fallbackAnswer, modelUsed: "StockSense-AI-Equity-Engine" });
     }
 
-    // 2. General Market Fallback (No active stock context)
+    // 2. General Market / Educational Fallback (No active stock context)
     if (userQuery.includes("pe ratio") || userQuery.includes("p/e") || userQuery.includes("valuation")) {
       fallbackAnswer = `### Price-to-Earnings (P/E) Valuation Analysis
 
@@ -236,35 +305,37 @@ The **Price-to-Earnings (P/E) Ratio** measures what the market is willing to pay
 #### Core Formulas & Variants:
 - **Trailing P/E (TTM):** $\\text{P/E}_{\\text{TTM}} = \\frac{\\text{Current Market Price}}{\\text{Trailing 12-Month EPS}}$
 - **Forward P/E:** $\\text{P/E}_{\\text{FWD}} = \\frac{\\text{Current Market Price}}{\\text{Projected Next-Year EPS}}$
-- **PEG Ratio (P/E to Growth):** $\\text{PEG} = \\frac{\\text{P/E Ratio}}{\\text{Annual EPS Growth Rate (\\%)}}$ (Values below 1.0 indicate potential undervaluation).
+- **PEG Ratio:** $\\text{PEG} = \\frac{\\text{P/E Ratio}}{\\text{Annual EPS Growth Rate (\\%)}}$ (Below 1.0 = potential undervaluation)
 
-#### Key Interpretation Guidelines:
-- **High P/E (> 25x):** Reflects high future growth expectations or speculative momentum.
-- **Low P/E (< 10x):** May indicate a value opportunity or cyclical headwinds.
-- **Sector Benchmarking:** Always compare P/E against industry peers and historical 5-year averages rather than in isolation.
+#### PSX & US Benchmarks:
+- **PSX Banking:** 6x–10x | **PSX Tech (SYS, TRG):** 15x–30x | **PSX Fertilizer:** 8x–14x
+- **US S&P 500 Average:** ~20x–22x | **US Growth Tech:** 30x–60x+
 
-> **Key Takeaway:** A low P/E is only attractive if earnings quality and return on equity (ROE) remain resilient without excessive debt.`;
+> **Key Takeaway:** A low P/E is only attractive if earnings quality and ROE remain resilient without excessive debt leverage.`;
     } else if (userQuery.includes("circuit breaker") || userQuery.includes("psx rule") || userQuery.includes("settlement") || userQuery.includes("t+2") || userQuery.includes("t+1")) {
-      fallbackAnswer = `### PSX Trading Rules, Circuit Breakers & Settlement Cycles
+      fallbackAnswer = `### PSX & US Market Trading Rules, Circuit Breakers & Settlement Cycles
 
-The Pakistan Stock Exchange (PSX) operates under strict regulatory guidelines established by SECP to manage volatility and counterparty risk.
+#### 🇵🇰 Pakistan Stock Exchange (PSX)
+- **Daily Price Limits:** ±7.5% or PKR 1.00 (whichever is higher) from prior day's closing price.
+- **Index Circuit Breaker:** KSE-30 moves ±5% → 45-minute market-wide cooling-off halt.
+- **Settlement (T+2):** Trades on Day T settle on Day T+2 via NCCPL and CDC.
+- **Deliverable Futures (DFN/DFX):** Monthly contracts settling on the last Friday of each month.
 
-#### 1. Daily Circuit Breakers (Price Limits)
-- **Upper / Lower Limits:** Daily price limit is capped at **±7.5%** or **PKR 1.00** (whichever is higher) based on the preceding day's closing price.
-- **Index-Based Circuit Breaker:** If the benchmark KSE-30 index moves **±5%** from previous close, a market-wide 45-minute cooling-off halt is triggered.
+#### 🇺🇸 US Markets (NASDAQ / NYSE)
+- **Level 1 Halt:** S&P 500 drops 7% → 15-minute trading halt.
+- **Level 2 Halt:** S&P 500 drops 13% → 15-minute trading halt.
+- **Level 3 Halt:** S&P 500 drops 20% → Trading suspended for the remainder of the session.
+- **Settlement (T+1):** As of May 2024, US equities settle T+1 (next business day).
+- **Pattern Day Trader (PDT) Rule:** Accounts under $25,000 limited to 3 day trades per 5 rolling business days.
 
-#### 2. Settlement Cycles
-- **Ready Market (T+2):** Trades execute on Day T and settle on Day T+2. Shares and funds are exchanged through NCCPL and CDC.
-- **Deliverable Futures (DFN/DFX):** Monthly standardized contracts with fixed settlement dates (typically the last Friday of each month).
-
-> **Key Takeaway:** Always account for the T+2 settlement window when planning liquidity needs and dividend entitlement book closure dates.`;
+> **Key Takeaway:** PSX uses T+2 while US markets upgraded to T+1 in 2024 — always account for settlement timing when planning dividend entitlement or liquidity needs.`;
     } else if (userQuery.includes("conformal") || userQuery.includes("interval") || userQuery.includes("var") || userQuery.includes("risk")) {
       fallbackAnswer = `### Quantitative Risk Modeling & Conformal Prediction
 
 StockSense AI integrates modern quantitative risk metrics to protect portfolios from fat-tailed financial shocks.
 
 #### 1. Conformal Prediction (80% Confidence Bounds)
-- **Mathematical Guarantee:** Unlike standard Gaussian assumptions that underestimate crash risk, Conformal Prediction computes non-parametric coverage guaranteed to capture the true return $\\ge 80\\%$ of the time.
+- **Mathematical Guarantee:** Non-parametric coverage guaranteed to capture the true return $\\ge 80\\%$ of the time — unlike Gaussian models that underestimate crash risk.
 - **Asymmetric Intervals:** Accounts for downside volatility clustering and market regime shifts.
 
 #### 2. Core Risk Ratios
@@ -282,7 +353,7 @@ StockSense AI integrates modern quantitative risk metrics to protect portfolios 
 #### 1. Relative Strength Index (RSI - 14 Periods)
 - **Overbought (> 70):** Strong upward momentum; watch for exhaustion or mean-reversion pullbacks.
 - **Oversold (< 30):** Heavy selling pressure; potential support rebound.
-- **Bullish Divergence:** Price makes lower lows while RSI makes higher lows—strong reversal signal.
+- **Bullish Divergence:** Price makes lower lows while RSI makes higher lows — strong reversal signal.
 
 #### 2. Moving Average Convergence Divergence (MACD 12, 26, 9)
 - **MACD Line:** 12-day EMA minus 26-day EMA.
@@ -297,15 +368,19 @@ StockSense AI integrates modern quantitative risk metrics to protect portfolios 
     } else {
       fallbackAnswer = `### StockSense AI — Institutional Financial Copilot
 
-I am ready to assist you across all equity markets, quantitative modeling, risk analytics, and trade strategies.
+I am your expert assistant for **Pakistan Stock Exchange (PSX)** 🇵🇰, **US Stock Markets (NASDAQ/NYSE)** 🇺🇸, and **UK Stock Markets (LSE/FTSE)** 🇬🇧.
 
 #### What You Can Ask Me:
-- **Stock Valuations & Financials:** Ask for fundamental analysis on any stock (e.g. *“Analyze Systems Limited (SYS) valuation vs TRG”* or *“Compare Apple vs Microsoft P/E and FCF”*).
-- **Technical & Quant Setups:** Inquire about indicator confluence (*“Explain RSI divergence with MACD confirmation”*, *“How does 80% Conformal Prediction quantify tail risk?”*).
-- **Exchange Rules & Mechanics:** Detailed PSX & Global market rules (*“Explain PSX ±7.5% circuit breakers and T+2 settlement”*, *“What are deliverable futures in Pakistan?”*).
-- **Portfolio & Risk Management:** Inquire about asset allocation, Value at Risk (VaR), Sharpe Ratio, and drawdown hedging strategies.
+- **PSX Stock Analysis:** *"Analyze ENGRO valuation"*, *"Top KSE-100 banking stocks"*, *"PSX circuit breaker rules"*
+- **US Stock Analysis:** *"Compare Apple vs Microsoft P/E and FCF"*, *"Explain S&P 500 sector rotation"*
+- **UK Stock Analysis:** *"Analyze Shell vs BP dividend yield"*, *"What are the top FTSE 100 constituents?"*
+- **Technical Analysis:** *"Explain RSI divergence with MACD"*, *"How do Fibonacci retracements work?"*
+- **Fundamental Valuation:** *"How to calculate DCF?"*, *"What is EV/EBITDA?"*, *"Explain DuPont Analysis"*
+- **Risk & Portfolio:** *"What is VaR?"*, *"Explain Sharpe vs Sortino Ratio"*, *"How does Conformal Prediction work?"*
+- **Market Rules:** *"PSX ±7.5% circuit breakers"*, *"US Pattern Day Trader rule"*, *"UK Stamp Duty Reserve Tax"*
+- **Any Stock Terminology:** Any formula, concept, calculation, or method in investing and trading.
 
-> **Key Takeaway:** Ask any financial or analytical question directly to receive institutional-grade structured breakdowns.`;
+> **Key Takeaway:** I'm specialized in Pakistan 🇵🇰, US 🇺🇸, and UK 🇬🇧 markets. Ask any financial or analytical question to receive institutional-grade structured breakdowns.`;
     }
 
     return NextResponse.json({ content: fallbackAnswer, modelUsed: "BuiltIn-Financial-Engine" });
@@ -314,11 +389,14 @@ I am ready to assist you across all equity markets, quantitative modeling, risk 
     return NextResponse.json({
       content: `### StockSense AI Copilot
 
-I am online and ready to assist you. Please ask any question regarding:
-- **Global & PSX Stock Analysis**
-- **Valuation Ratios & Fundamental Modeling**
+I am online and ready to assist you with **Pakistan (PSX)** 🇵🇰, **United States (NASDAQ/NYSE)** 🇺🇸, and **United Kingdom (LSE/FTSE)** 🇬🇧 stock markets.
+
+Please ask any question regarding:
+- **PSX, US & UK Stock Analysis & Valuations**
+- **Valuation Ratios & Fundamental Modeling (P/E, DCF, EV/EBITDA)**
 - **Technical Indicators (RSI, MACD, Bollinger Bands)**
-- **Quantitative Risk & Conformal Prediction**`,
+- **Quantitative Risk & Conformal Prediction**
+- **Any Stock Market Terminology, Formula, or Calculation**`,
       modelUsed: "Fallback",
     });
   }

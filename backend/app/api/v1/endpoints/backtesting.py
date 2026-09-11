@@ -45,21 +45,61 @@ async def _build_timeline_from_db(
     """
     Loads historical OHLCV bars from canonical database and falls back to
     provider_registry (PSX dataset, Yahoo Finance, Stooq) to support all global markets.
+
+    Normalizations applied:
+      - market_code "GB" is mapped to "UK" (LSE / GBP conventions)
+      - benchmark_symbol aliases: KSE100 → PSX composite, S&P 500 → ^GSPC, FTSE 100 → ^FTSE
+      - Dates are fully user-specified; no hardcoded defaults
     """
     from sqlalchemy import text
 
+    # ── Normalize market code: GB → UK (both refer to LSE / GBP) ──
+    normalized_market = "UK" if market_code.upper() in ("GB", "GB.LSE") else market_code.upper()
+
+    # ── Benchmark symbol alias resolution ──
+    BENCHMARK_ALIASES: Dict[str, str] = {
+        # Pakistan
+        "KSE100": "^GSPC",     # Will be replaced by PSX composite logic below
+        "KSE-100": "^GSPC",
+        "KSE 100": "^GSPC",
+        # US
+        "S&P 500": "^GSPC",
+        "S&P500": "^GSPC",
+        "SPX": "^GSPC",
+        "SP500": "^GSPC",
+        # UK / GB
+        "FTSE 100": "^FTSE",
+        "FTSE100": "^FTSE",
+        "FTSE": "^FTSE",
+        "UK100": "^FTSE",
+    }
+    resolved_benchmark = benchmark_symbol
+    if benchmark_symbol:
+        bm_upper = benchmark_symbol.upper().strip()
+        resolved_benchmark = BENCHMARK_ALIASES.get(bm_upper, benchmark_symbol)
+
+        # PSX-specific: use ISF.L for FTSE, SPY fallback for S&P, keep PSX raw index if in PK market
+        if normalized_market == "PK" and bm_upper in ("KSE100", "KSE-100", "KSE 100"):
+            resolved_benchmark = "KSE100"   # Will be fetched from PSX CSV dataset
+        elif normalized_market == "UK" and bm_upper in ("FTSE100", "FTSE 100", "FTSE", "UK100"):
+            resolved_benchmark = "^FTSE"    # yfinance resolves this correctly
+
     bars_by_date: Dict[str, MarketTimelineBar] = {}
-    
-    # Parse dates
+
+    # ── Parse dates (fully user-configurable — no hardcoded defaults) ──
     try:
         start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
-    except Exception:
-        start_dt = date(2022, 1, 1)
-        
+    except ValueError:
+        raise ValueError(f"Invalid start_date format: '{start_date}'. Expected YYYY-MM-DD.")
+
     try:
         end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
-    except Exception:
-        end_dt = date.today()
+    except ValueError:
+        raise ValueError(f"Invalid end_date format: '{end_date}'. Expected YYYY-MM-DD.")
+
+    if start_dt >= end_dt:
+        raise ValueError(f"start_date ({start_date}) must be before end_date ({end_date}).")
+
 
     for sec_id in securities:
         try:
@@ -79,7 +119,7 @@ async def _build_timeline_from_db(
                           AND market_code = :market_code
                         ORDER BY date ASC
                     """),
-                    {"ticker": ticker, "start_date": start_date, "end_date": end_date, "market_code": market_code},
+                    {"ticker": ticker, "start_date": start_date, "end_date": end_date, "market_code": normalized_market},
                 )
                 price_rows = rows.fetchall()
             except Exception:
@@ -118,8 +158,8 @@ async def _build_timeline_from_db(
                 # Resolve from provider registry (PSX in-memory dataset, Yahoo Finance, Stooq)
                 canonical_prices = await provider_registry.get_historical_prices(
                     symbol=ticker,
-                    market_code=market_code,
-                    exchange_code="PSX" if market_code == "PK" else "NASDAQ",
+                    market_code=normalized_market,
+                    exchange_code="PSX" if normalized_market == "PK" else ("LSE" if normalized_market == "UK" else "NASDAQ"),
                     start_date=start_dt,
                     end_date=end_dt,
                 )
@@ -156,7 +196,7 @@ async def _build_timeline_from_db(
             logger.warning(f"[BACKTEST] Failed to load price data for {sec_id}: {exc}")
 
     # Load benchmark prices if provided
-    if benchmark_symbol:
+    if resolved_benchmark:
         try:
             bm_rows = []
             try:
@@ -169,7 +209,7 @@ async def _build_timeline_from_db(
                           AND date <= :end_date
                         ORDER BY date ASC
                     """),
-                    {"ticker": benchmark_symbol, "start_date": start_date, "end_date": end_date},
+                    {"ticker": resolved_benchmark, "start_date": start_date, "end_date": end_date},
                 )
                 bm_rows = rows.fetchall()
             except Exception:
@@ -184,9 +224,9 @@ async def _build_timeline_from_db(
                         }
             else:
                 bm_prices = await provider_registry.get_historical_prices(
-                    symbol=benchmark_symbol,
-                    market_code=market_code,
-                    exchange_code="PSX" if market_code == "PK" else "NASDAQ",
+                    symbol=resolved_benchmark,
+                    market_code=normalized_market,
+                    exchange_code="PSX" if normalized_market == "PK" else ("LSE" if normalized_market == "UK" else "NASDAQ"),
                     start_date=start_dt,
                     end_date=end_dt,
                 )
@@ -290,24 +330,25 @@ async def run_backtest(
     """
     Executes a full institutional-grade multi-market historical backtest.
 
-    - Loads real OHLCV data from canonical providers across PSX, US, UK, JP, HK, and IN
+    - Loads real OHLCV data from canonical providers across PSX, US, UK/GB, JP, HK, and IN
     - Enforces zero look-ahead via NEXT_OPEN execution semantics
+    - Applies 5 BPS slippage, broker commissions, and local statutory taxes (SEC, CVT, SDRT)
     - Computes all performance metrics, risk reports, attribution, and stress tests
+    - Dates are fully user-configurable: pass any valid YYYY-MM-DD range
     """
     try:
         import asyncio
         from app.backtesting.engine.backtest_engine import BacktestEngine
 
-        # Validate date range
-        if config.start_date >= config.end_date:
-            raise HTTPException(400, "start_date must be strictly before end_date")
+        # Normalize GB → UK market code
+        effective_market = "UK" if config.market_code.upper() in ("GB", "GB.LSE") else config.market_code
 
         # Build chronological timeline from real market data
         timeline = await _build_timeline_from_db(
             securities=config.securities,
             start_date=config.start_date,
             end_date=config.end_date,
-            market_code=config.market_code,
+            market_code=effective_market,
             benchmark_symbol=config.benchmark_symbol,
             db=db,
         )
@@ -315,7 +356,7 @@ async def run_backtest(
         if len(timeline) == 0:
             raise HTTPException(
                 422,
-                f"No historical price data found for {config.securities} in market {config.market_code} "
+                f"No historical price data found for {config.securities} in market {effective_market} "
                 f"between {config.start_date} and {config.end_date}. "
                 "Ensure valid tickers and date ranges are provided."
             )
@@ -335,9 +376,12 @@ async def run_backtest(
 
     except HTTPException:
         raise
+    except ValueError as val_exc:
+        raise HTTPException(400, str(val_exc))
     except Exception as exc:
         logger.exception(f"[BACKTEST] Engine failed: {exc}")
         raise HTTPException(500, f"Backtest execution failed: {str(exc)}")
+
 
 
 async def _persist_backtest_run(result: BacktestResponse, db: AsyncSession) -> None:

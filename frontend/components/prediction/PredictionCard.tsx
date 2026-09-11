@@ -1,18 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Brain, TrendingUp, TrendingDown, Minus, ShieldAlert,
   Target, Activity, CheckCircle2, DollarSign, Calculator,
-  ArrowUpRight, ArrowDownRight, Info, AlertTriangle, Sparkles
+  ArrowUpRight, ArrowDownRight, Info, AlertTriangle, Sparkles,
+  Loader2, RefreshCw
 } from "lucide-react";
+import { api } from "@/lib/api";
 import { MLPrediction } from "@/lib/types";
 import { formatPercent, formatCurrency } from "@/lib/formatting";
 
 interface PredictionCardProps {
   prediction?: MLPrediction | null;
   loading?: boolean;
-  onHorizonChange?: (horizon: string) => void;
+  onHorizonChange?: (horizon: string) => Promise<void> | void;
+  securityId?: string;
   currency?: string;
   ticker?: string;
   currentPrice?: number;
@@ -31,21 +34,52 @@ export function PredictionCard({
   prediction,
   loading = false,
   onHorizonChange,
+  securityId,
   currency = "USD",
   ticker = "SECURITY",
   currentPrice,
   className = "",
 }: PredictionCardProps) {
-  const [activeHorizon, setActiveHorizon] = useState("30d");
+  const [activeHorizon, setActiveHorizon] = useState(prediction?.horizon?.toLowerCase() || "30d");
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [localPrediction, setLocalPrediction] = useState<MLPrediction | null>(prediction || null);
+
+  useEffect(() => {
+    if (prediction) {
+      setLocalPrediction(prediction);
+      if (prediction.horizon) {
+        setActiveHorizon(prediction.horizon.toLowerCase());
+      }
+    }
+  }, [prediction]);
+
   const defaultInvestment = currency === "PKR" || currency === "JPY" || currency === "INR" ? 50000 : 1000;
   const [investmentAmount, setInvestmentAmount] = useState<number>(defaultInvestment);
 
-  const handleHorizonClick = (h: string) => {
+  const handleHorizonClick = async (h: string) => {
+    if (h === activeHorizon && !isProcessing && !loading) return;
     setActiveHorizon(h);
-    if (onHorizonChange) onHorizonChange(h);
+    setIsProcessing(true);
+
+    try {
+      if (onHorizonChange) {
+        await onHorizonChange(h);
+      } else if (securityId) {
+        const res = await api.ml.predict(securityId, h);
+        if (res) {
+          setLocalPrediction(res);
+        }
+      }
+    } catch (err) {
+      console.warn("Prediction re-calculation error for horizon:", h, err);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
-  if (loading) {
+  const currentPred = localPrediction || prediction;
+
+  if (loading && !currentPred) {
     return (
       <div className={`bg-[#0B0F19] border border-border rounded-2xl p-6 shadow-xl space-y-4 animate-pulse ${className}`}>
         <div className="h-6 w-48 bg-white/10 rounded-md" />
@@ -60,7 +94,7 @@ export function PredictionCard({
     );
   }
 
-  if (!prediction) {
+  if (!currentPred) {
     return (
       <div className={`bg-[#0B0F19] border border-border rounded-2xl p-6 shadow-xl text-center space-y-3 ${className}`}>
         <div className="h-10 w-10 mx-auto rounded-xl bg-brand/10 border border-brand/20 flex items-center justify-center text-brand">
@@ -74,11 +108,20 @@ export function PredictionCard({
     );
   }
 
-  const isUp = prediction.direction.toUpperCase() === "UP";
-  const isDown = prediction.direction.toUpperCase() === "DOWN";
-  const probUp = Math.round(prediction.probability_up * 100);
-  const probDown = Math.round((prediction.probability_down || 1 - prediction.probability_up) * 100);
-  const expReturn = prediction.expected_return_pct;
+  const isUp = currentPred.direction.toUpperCase() === "UP";
+  const isDown = currentPred.direction.toUpperCase() === "DOWN";
+  const probUp = Math.round(currentPred.probability_up * 100);
+  const probDown = Math.round((currentPred.probability_down || 1 - currentPred.probability_up) * 100);
+  const expReturn = currentPred.expected_return_pct;
+
+  // Normalize confidence score and volatility
+  const normalizedConfidence = currentPred.confidence_score > 1.0
+    ? currentPred.confidence_score
+    : currentPred.confidence_score * 100;
+
+  const normalizedVol = currentPred.predicted_volatility > 1.0
+    ? currentPred.predicted_volatility
+    : currentPred.predicted_volatility * 100;
 
   // ─────────────────────────────────────────────────────────
   // Action Verdict Logic (Buy / Hold / Avoid)
@@ -157,27 +200,29 @@ export function PredictionCard({
   const validAmount = isNaN(investmentAmount) || investmentAmount <= 0 ? 0 : investmentAmount;
   const estimatedProfit = validAmount * (expReturn / 100);
   const totalProjectedValue = validAmount + estimatedProfit;
-  const lowerBoundProfit = validAmount * (prediction.lower_bound_pct / 100);
-  const upperBoundProfit = validAmount * (prediction.upper_bound_pct / 100);
+  const lowerBoundProfit = validAmount * (currentPred.lower_bound_pct / 100);
+  const upperBoundProfit = validAmount * (currentPred.upper_bound_pct / 100);
   const isProfitPositive = estimatedProfit >= 0;
 
   // ─────────────────────────────────────────────────────────
   // Key Reasons & Drivers
   // ─────────────────────────────────────────────────────────
-  const positiveDrivers = (prediction.top_positive_features && prediction.top_positive_features.length > 0)
-    ? prediction.top_positive_features.slice(0, 3).map((f: any) => typeof f === "string" ? f : f.feature_name || f.feature || "Bullish Momentum")
+  const positiveDrivers = (currentPred.top_positive_features && currentPred.top_positive_features.length > 0)
+    ? currentPred.top_positive_features.slice(0, 3).map((f: any) => typeof f === "string" ? f : f.feature_name || f.feature || "Bullish Momentum")
     : [
         "Favorable technical trend and multi-timeframe moving average alignment",
         "Expanding trading volume supporting upside price action",
         "Conformal interval indicates positive baseline expected return",
       ];
 
-  const negativeDrivers = (prediction.top_negative_features && prediction.top_negative_features.length > 0)
-    ? prediction.top_negative_features.slice(0, 3).map((f: any) => typeof f === "string" ? f : f.feature_name || f.feature || "Volatile Market")
+  const negativeDrivers = (currentPred.top_negative_features && currentPred.top_negative_features.length > 0)
+    ? currentPred.top_negative_features.slice(0, 3).map((f: any) => typeof f === "string" ? f : f.feature_name || f.feature || "Volatile Market")
     : [
-        `Market volatility regime (${(prediction.predicted_volatility * 100).toFixed(1)}% ann. vol)`,
+        `Market volatility regime (${normalizedVol.toFixed(1)}% ann. vol)`,
         "Short-term resistance overhead and macro yield curve considerations",
       ];
+
+  const isBusy = isProcessing || loading;
 
   return (
     <div className={`bg-[#0B0F19] border border-border rounded-2xl p-4 sm:p-6 shadow-xl space-y-6 ${className}`}>
@@ -192,57 +237,81 @@ export function PredictionCard({
               StockSense AI Multi-Factor Prediction Engine
             </h3>
             <span className="text-[10px] text-gray-500 font-mono">
-              Model: {prediction.model_version || "v2.4-LightGBM-Conformal"} · Point-in-Time Calibrated
+              Model: {currentPred.model_version || "v2.4-LightGBM-Conformal"} · Point-in-Time Calibrated
             </span>
           </div>
         </div>
 
         {/* Horizon Tabs */}
         <div className="flex items-center gap-1 bg-background-elevated border border-border p-1 rounded-xl">
-          {HORIZONS.map((h) => (
-            <button
-              key={h.id}
-              onClick={() => handleHorizonClick(h.id)}
-              className={`px-2.5 py-1 rounded-lg text-xs font-mono font-medium transition-all ${
-                activeHorizon === h.id
-                  ? "bg-brand text-white shadow-sm font-semibold"
-                  : "text-gray-400 hover:text-white"
-              }`}
-            >
-              {h.label}
-            </button>
-          ))}
+          {HORIZONS.map((h) => {
+            const isSelected = activeHorizon === h.id;
+            const isButtonBusy = isBusy && isSelected;
+            return (
+              <button
+                key={h.id}
+                type="button"
+                disabled={isBusy}
+                onClick={() => handleHorizonClick(h.id)}
+                className={`flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all ${
+                  isSelected
+                    ? "bg-brand text-white shadow-md shadow-blue-500/20 font-semibold"
+                    : "text-gray-400 hover:text-white hover:bg-white/5"
+                } ${isBusy ? "opacity-80 cursor-wait" : "cursor-pointer"}`}
+              >
+                {isButtonBusy && <Loader2 className="w-3 h-3 animate-spin text-white shrink-0" />}
+                <span>{h.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* 1. Primary Buy/Hold/Avoid Recommendation Banner */}
-      <div className={`p-4 sm:p-5 rounded-2xl border ${verdict.bg} ${verdict.border} space-y-3`}>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className={`h-11 w-11 rounded-xl flex items-center justify-center font-bold shadow-inner ${verdict.badgeBg}`}>
-              <verdict.icon className="h-6 w-6" />
-            </div>
-            <div>
-              <div className="text-[10px] uppercase font-bold tracking-wider text-gray-400">
-                AI Recommendation ({activeHorizon.toUpperCase()} Horizon)
-              </div>
-              <div className={`text-xl sm:text-2xl font-extrabold tracking-tight ${verdict.text}`}>
-                {verdict.label}
-              </div>
-            </div>
+      {/* Dynamic Processing Status Indicator */}
+      {isBusy && (
+        <div className="flex items-center justify-between p-3 px-4 rounded-xl bg-brand/10 border border-brand/30 text-brand text-xs font-mono animate-pulse">
+          <div className="flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-brand shrink-0" />
+            <span>
+              Re-computing Multi-Factor Model for <strong className="text-white">{HORIZONS.find((x) => x.id === activeHorizon)?.label || activeHorizon}</strong> horizon…
+            </span>
           </div>
-
-          <div className="text-right">
-            <div className="text-[10px] text-gray-400 uppercase font-mono">Expected Return</div>
-            <div className={`text-xl font-mono font-bold ${expReturn >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-              {formatPercent(expReturn, true, 2)}
-            </div>
-          </div>
+          <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-gray-400 font-sans">
+            <RefreshCw className="w-3 h-3 animate-spin text-brand" /> Point-in-Time Calibrated
+          </span>
         </div>
-        <p className="text-xs text-gray-300 leading-relaxed font-sans border-t border-white/5 pt-2">
-          {verdict.sublabel}
-        </p>
-      </div>
+      )}
+
+      {/* Dynamic Content Wrapped in smooth transition */}
+      <div className={`space-y-6 transition-opacity duration-300 ${isBusy ? "opacity-60 pointer-events-none" : "opacity-100"}`}>
+        {/* 1. Primary Buy/Hold/Avoid Recommendation Banner */}
+        <div className={`p-4 sm:p-5 rounded-2xl border ${verdict.bg} ${verdict.border} space-y-3`}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className={`h-11 w-11 rounded-xl flex items-center justify-center font-bold shadow-inner ${verdict.badgeBg}`}>
+                <verdict.icon className="h-6 w-6" />
+              </div>
+              <div>
+                <div className="text-[10px] uppercase font-bold tracking-wider text-gray-400">
+                  AI Recommendation ({activeHorizon.toUpperCase()} Horizon)
+                </div>
+                <div className={`text-xl sm:text-2xl font-extrabold tracking-tight ${verdict.text}`}>
+                  {verdict.label}
+                </div>
+              </div>
+            </div>
+
+            <div className="text-right">
+              <div className="text-[10px] text-gray-400 uppercase font-mono">Expected Return</div>
+              <div className={`text-xl font-mono font-bold ${expReturn >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                {formatPercent(expReturn, true, 2)}
+              </div>
+            </div>
+          </div>
+          <p className="text-xs text-gray-300 leading-relaxed font-sans border-t border-white/5 pt-2">
+            {verdict.sublabel}
+          </p>
+        </div>
 
       {/* 2. Interactive Profit & Returns Calculator */}
       <div className="bg-[#0E1422] border border-border/80 rounded-2xl p-4 sm:p-5 space-y-4">
@@ -327,7 +396,7 @@ export function PredictionCard({
                 {formatCurrency(lowerBoundProfit, currency, 0)} → {formatCurrency(upperBoundProfit, currency, 0)}
               </div>
               <div className="text-[10px] text-gray-500 font-mono">
-                {formatPercent(prediction.lower_bound_pct, true, 1)} to {formatPercent(prediction.upper_bound_pct, true, 1)}
+                {formatPercent(currentPred.lower_bound_pct, true, 1)} to {formatPercent(currentPred.upper_bound_pct, true, 1)}
               </div>
             </div>
           </div>
@@ -382,15 +451,15 @@ export function PredictionCard({
 
         <div>
           <div className="text-[10px] text-gray-400 uppercase">Model Confidence</div>
-          <div className="font-bold text-white mt-0.5">{(prediction.confidence_score * 100).toFixed(0)}%</div>
+          <div className="font-bold text-white mt-0.5">{normalizedConfidence.toFixed(0)}%</div>
           <div className="text-[10px] text-gray-500">
-            {prediction.confidence_score >= 0.7 ? "High Confidence" : "Moderate Confidence"}
+            {normalizedConfidence >= 70 ? "High Confidence" : "Moderate Confidence"}
           </div>
         </div>
 
         <div>
           <div className="text-[10px] text-gray-400 uppercase">Predicted Volatility</div>
-          <div className="font-bold text-white mt-0.5">{(prediction.predicted_volatility * 100).toFixed(1)}%</div>
+          <div className="font-bold text-white mt-0.5">{normalizedVol.toFixed(1)}%</div>
           <div className="text-[10px] text-gray-500">Annualized Forecast</div>
         </div>
       </div>
@@ -401,6 +470,7 @@ export function PredictionCard({
         <span className="leading-relaxed">
           <strong>Mandatory Disclaimer:</strong> StockSense AI provides analytical and model-based probabilistic forecasts. Predictions and calculated returns are quantitative estimates, not guaranteed outcomes, and do not constitute personalized financial advice.
         </span>
+      </div>
       </div>
     </div>
   );
