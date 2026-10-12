@@ -31,6 +31,9 @@ from app.models.portfolio import (
 from app.models.audit import (
     AnalysisRequest, DataQualityLog, ReportExport
 )
+from app.models.lan import (
+    LANDevice, LANAccessLog
+)
 from app.models.backtest import (
     BacktestRunRecord, BacktestTradeRecord, RiskLimitRecord, RiskEventRecord,
     PortfolioOptimizationRecord
@@ -89,10 +92,12 @@ __all__ = [
     "Position",
     "ThesisValidation",
     "Alert",
-    # audit
+    # audit & lan
     "AnalysisRequest",
     "DataQualityLog",
     "ReportExport",
+    "LANDevice",
+    "LANAccessLog",
     # backtesting & risk
     "BacktestRunRecord",
     "BacktestTradeRecord",

@@ -42,3 +42,16 @@ class FaceAuthResponse(BaseModel):
     distance: Optional[float] = None
     confidence_pct: Optional[float] = None
     user: Optional[FaceUserResponse] = None
+
+
+class PinLoginRequest(BaseModel):
+    identifier: str = Field(..., min_length=1, description="User's full name, email, or user ID")
+    pin: Optional[str] = Field(None, description="User's PIN (required for all users)")
+
+
+class LanSignupRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=150, description="User's full name or display name")
+    email: Optional[str] = Field(None, description="Optional email address")
+    role: Optional[str] = Field("user", description="'admin' or 'user'")
+    pin: Optional[str] = Field(None, description="User's chosen PIN (4-20 characters)")
+    admin_pin: Optional[str] = Field(None, description="Optional master PIN (e.g. admin2026) to grant admin role")

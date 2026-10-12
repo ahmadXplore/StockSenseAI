@@ -42,9 +42,16 @@ class Settings(BaseSettings):
     debug: bool = True
     secret_key: str = "CHANGE_ME_TO_A_RANDOM_64_CHAR_STRING"
     api_host: str = "0.0.0.0"
-    api_port: int = 8000
-    frontend_url: str = "http://localhost:3000"
-    cors_origins: List[str] = ["http://localhost:3000"]
+    api_port: int = 8005
+    frontend_port: int = 3005
+    frontend_url: str = "http://localhost:3005"
+    cors_origins: List[str] = ["http://localhost:3005", "http://localhost:3000"]
+
+    # ---- LAN Server & Device Access ----
+    lan_enabled: bool = True
+    lan_device_auth_required: bool = True
+    lan_auto_approve_local: bool = True
+    lan_server_port: int = 8005
 
     # ---- Database ----
     postgres_user: str = "stocksense"
@@ -86,6 +93,48 @@ class Settings(BaseSettings):
     # ---- Logging ----
     log_level: str = "INFO"
     log_format: str = "json"
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Any) -> List[str]:
+        origins: List[str] = []
+        if isinstance(v, str):
+            origins = [x.strip() for x in v.split(",") if x.strip()]
+        elif isinstance(v, list):
+            origins = [str(x).strip() for x in v if str(x).strip()]
+
+        base_origins = {
+            "http://localhost:3005",
+            "http://127.0.0.1:3005",
+            "http://localhost:8005",
+            "http://127.0.0.1:8005",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "http://localhost",
+            "http://127.0.0.1",
+        }
+        for o in origins:
+            base_origins.add(o.rstrip("/"))
+
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.2)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith("127."):
+                base_origins.add(f"http://{ip}:3005")
+                base_origins.add(f"http://{ip}:8005")
+                base_origins.add(f"http://{ip}:3000")
+                base_origins.add(f"http://{ip}:8000")
+                base_origins.add(f"http://{ip}")
+        except Exception:
+            pass
+
+        return sorted(list(base_origins))
 
     @field_validator("database_url", mode="before")
     @classmethod

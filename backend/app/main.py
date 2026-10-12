@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
+from app.core.lan_middleware import LANDeviceAccessMiddleware
 from app.api.v1.router import api_router
 from app.db.base import Base
 from app.db.session import async_engine
@@ -88,7 +89,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS Middleware
+# LAN Device Access Control Middleware (runs after CORS)
+app.add_middleware(LANDeviceAccessMiddleware)
+
+# CORS Middleware (outermost, processes preflight OPTIONS first)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

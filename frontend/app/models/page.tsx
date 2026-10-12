@@ -119,7 +119,7 @@ export default function ModelsPage() {
             <code className="font-mono text-brand bg-brand/10 px-1 rounded">horizon</code>
           </div>
         </div>
-        <a href="http://localhost:8000/docs#/Machine%20Learning/train_model_api_v1_ml_train_post"
+        <a href="/docs#/Machine%20Learning/train_model_api_v1_ml_train_post"
           target="_blank" rel="noopener noreferrer"
           className="shrink-0 px-4 py-2 bg-brand hover:bg-brand-hover text-white rounded-lg text-xs font-semibold transition-colors">
           Open API Docs →

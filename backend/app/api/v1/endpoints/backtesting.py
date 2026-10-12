@@ -9,9 +9,13 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, date
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
+from decimal import Decimal
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.core import db_cache
+from app.models.backtest import BacktestRunRecord, BacktestTradeRecord
 from app.core.logging import get_logger
 from app.backtesting.schemas import (
     BacktestConfig, BacktestResponse, StrategyType,
@@ -385,70 +389,8 @@ async def run_backtest(
 
 
 async def _persist_backtest_run(result: BacktestResponse, db: AsyncSession) -> None:
-    """Persists backtest run summary and trades to the analysis schema."""
-    from sqlalchemy import text
-    
-    run_dict = {
-        "run_id": result.run_id,
-        "name": result.config.name,
-        "configuration_hash": result.configuration_hash,
-        "market_code": result.config.market_code,
-        "exchange_code": result.config.exchange_code,
-        "strategy_type": result.config.strategy_type.value,
-        "start_date": result.config.start_date,
-        "end_date": result.config.end_date,
-        "initial_capital": result.performance.initial_capital,
-        "ending_capital": result.performance.ending_capital,
-        "total_return_pct": result.performance.total_return_pct,
-        "cagr_pct": result.performance.cagr_pct,
-        "sharpe_ratio": result.performance.sharpe_ratio,
-        "sortino_ratio": result.performance.sortino_ratio,
-        "calmar_ratio": result.performance.calmar_ratio,
-        "max_drawdown_pct": result.performance.max_drawdown_pct,
-        "win_rate_pct": result.performance.win_rate_pct,
-        "profit_factor": result.performance.profit_factor,
-        "total_trades": result.performance.total_trades,
-        "portfolio_volatility": result.risk.portfolio_volatility if result.risk else None,
-        "var_95_daily": result.risk.var_95_daily if result.risk else None,
-        "cvar_95_daily": result.risk.cvar_95_daily if result.risk else None,
-        "configuration_json": result.config.dict(),
-        "performance_json": result.performance.dict(),
-        "risk_json": result.risk.dict() if result.risk else None,
-        "attribution_json": result.attribution.dict() if result.attribution else None,
-        "monthly_returns_json": result.monthly_returns_heatmap,
-        "reproducibility_seed": result.reproducibility_seed,
-        "execution_duration_seconds": result.execution_duration_seconds,
-    }
-
-    try:
-        await db.execute(
-            text("""
-                INSERT INTO analysis.backtest_run_records (
-                    id, run_id, name, configuration_hash, market_code, exchange_code,
-                    strategy_type, start_date, end_date, initial_capital, ending_capital,
-                    total_return_pct, cagr_pct, sharpe_ratio, sortino_ratio, calmar_ratio,
-                    max_drawdown_pct, win_rate_pct, profit_factor, total_trades,
-                    portfolio_volatility, var_95_daily, cvar_95_daily,
-                    configuration_json, performance_json, risk_json, attribution_json,
-                    monthly_returns_json, reproducibility_seed, execution_duration_seconds,
-                    created_at
-                ) VALUES (
-                    gen_random_uuid(), :run_id, :name, :configuration_hash, :market_code, :exchange_code,
-                    :strategy_type, :start_date, :end_date, :initial_capital, :ending_capital,
-                    :total_return_pct, :cagr_pct, :sharpe_ratio, :sortino_ratio, :calmar_ratio,
-                    :max_drawdown_pct, :win_rate_pct, :profit_factor, :total_trades,
-                    :portfolio_volatility, :var_95_daily, :cvar_95_daily,
-                    :configuration_json, :performance_json, :risk_json, :attribution_json,
-                    :monthly_returns_json, :reproducibility_seed, :execution_duration_seconds,
-                    NOW()
-                )
-                ON CONFLICT (run_id) DO NOTHING
-            """),
-            run_dict,
-        )
-        await db.commit()
-    except Exception:
-        pass
+    """Persists backtest run summary and trades to the database."""
+    await db_cache.save_backtest_run(result, db)
 
 
 # ─────────────────────────────────────────────────────────
@@ -463,34 +405,47 @@ async def list_backtest_runs(
     db: AsyncSession = Depends(get_db),
 ):
     """Returns a paginated list of historical backtest run summaries ordered by creation time."""
-    from sqlalchemy import text
-
-    filters = []
-    params: Dict[str, Any] = {"limit": limit}
-
-    if market_code:
-        filters.append("market_code = :market_code")
-        params["market_code"] = market_code
-    if strategy_type:
-        filters.append("strategy_type = :strategy_type")
-        params["strategy_type"] = strategy_type
-
-    where_clause = ("WHERE " + " AND ".join(filters)) if filters else ""
-
     try:
-        rows = await db.execute(
-            text(f"""
-                SELECT run_id, name, market_code, strategy_type, start_date, end_date,
-                       initial_capital, ending_capital, total_return_pct, cagr_pct,
-                       sharpe_ratio, max_drawdown_pct, win_rate_pct, total_trades, created_at
-                FROM analysis.backtest_run_records
-                {where_clause}
-                ORDER BY created_at DESC
-                LIMIT :limit
-            """),
-            params,
+        limit_n = int(limit) if isinstance(limit, (int, float, str)) and str(limit).isdigit() else 20
+        stmt = (
+            select(
+                BacktestRunRecord.run_id,
+                BacktestRunRecord.name,
+                BacktestRunRecord.market_code,
+                BacktestRunRecord.strategy_type,
+                BacktestRunRecord.start_date,
+                BacktestRunRecord.end_date,
+                BacktestRunRecord.initial_capital,
+                BacktestRunRecord.ending_capital,
+                BacktestRunRecord.total_return_pct,
+                BacktestRunRecord.cagr_pct,
+                BacktestRunRecord.sharpe_ratio,
+                BacktestRunRecord.max_drawdown_pct,
+                BacktestRunRecord.win_rate_pct,
+                BacktestRunRecord.total_trades,
+                BacktestRunRecord.created_at,
+            )
+            .order_by(BacktestRunRecord.created_at.desc())
+            .limit(limit_n)
         )
+        if isinstance(market_code, str) and market_code.strip():
+            stmt = stmt.where(BacktestRunRecord.market_code == market_code.strip().upper())
+        if isinstance(strategy_type, str) and strategy_type.strip():
+            stmt = stmt.where(BacktestRunRecord.strategy_type == strategy_type.strip().upper())
+
+        rows = await db.execute(stmt)
         runs = [dict(row._mapping) for row in rows.fetchall()]
+        for r in runs:
+            if isinstance(r.get("start_date"), (date, datetime)):
+                r["start_date"] = str(r["start_date"])
+            if isinstance(r.get("end_date"), (date, datetime)):
+                r["end_date"] = str(r["end_date"])
+            if isinstance(r.get("created_at"), (date, datetime)):
+                r["created_at"] = str(r["created_at"])
+            for k, v in list(r.items()):
+                if isinstance(v, Decimal):
+                    r[k] = float(v)
+
         return {"runs": runs, "count": len(runs)}
     except Exception as exc:
         logger.warning(f"[BACKTEST] Could not list runs: {exc}")
@@ -504,17 +459,57 @@ async def list_backtest_runs(
 @router.get("/runs/{run_id}", summary="Retrieve Backtest Run Details")
 async def get_backtest_run(run_id: str, db: AsyncSession = Depends(get_db)):
     """Returns the full persisted backtest run record including equity curve and trades."""
-    from sqlalchemy import text
-
     try:
-        row = await db.execute(
-            text("SELECT * FROM analysis.backtest_run_records WHERE run_id = :run_id"),
-            {"run_id": run_id},
-        )
-        rec = row.fetchone()
+        stmt = select(BacktestRunRecord).where(BacktestRunRecord.run_id == run_id)
+        res = await db.execute(stmt)
+        rec = res.scalars().first()
         if not rec:
             raise HTTPException(404, f"Backtest run '{run_id}' not found.")
-        return dict(rec._mapping)
+
+        stmt_trades = select(BacktestTradeRecord).where(BacktestTradeRecord.backtest_run_id == rec.id)
+        res_trades = await db.execute(stmt_trades)
+        trade_recs = res_trades.scalars().all()
+        trades_list = []
+        for t in trade_recs:
+            trades_list.append({
+                "trade_id": t.trade_id,
+                "ticker": t.ticker,
+                "side": t.side,
+                "entry_date": str(t.entry_date),
+                "entry_price": float(t.entry_price or 0.0),
+                "exit_date": str(t.exit_date),
+                "exit_price": float(t.exit_price or 0.0),
+                "shares": float(t.shares or 0.0),
+                "gross_pnl": float(t.gross_pnl or 0.0),
+                "net_pnl": float(t.net_pnl or 0.0),
+                "return_pct": float(t.return_pct or 0.0),
+                "exit_reason": t.exit_reason,
+            })
+
+        return {
+            "run_id": rec.run_id,
+            "name": rec.name,
+            "market_code": rec.market_code,
+            "exchange_code": rec.exchange_code,
+            "strategy_type": rec.strategy_type,
+            "start_date": str(rec.start_date),
+            "end_date": str(rec.end_date),
+            "initial_capital": float(rec.initial_capital or 0.0),
+            "ending_capital": float(rec.ending_capital or 0.0),
+            "total_return_pct": float(rec.total_return_pct or 0.0),
+            "cagr_pct": float(rec.cagr_pct or 0.0) if rec.cagr_pct else None,
+            "sharpe_ratio": float(rec.sharpe_ratio or 0.0) if rec.sharpe_ratio else None,
+            "max_drawdown_pct": float(rec.max_drawdown_pct or 0.0) if rec.max_drawdown_pct else None,
+            "win_rate_pct": float(rec.win_rate_pct or 0.0) if rec.win_rate_pct else None,
+            "total_trades": rec.total_trades,
+            "configuration": rec.configuration_json,
+            "performance": rec.performance_json,
+            "risk": rec.risk_json,
+            "attribution": rec.attribution_json,
+            "monthly_returns": rec.monthly_returns_json,
+            "trades": trades_list,
+            "created_at": str(rec.created_at),
+        }
     except HTTPException:
         raise
     except Exception as exc:

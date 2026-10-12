@@ -13,6 +13,7 @@ import {
   PortfolioSummary, PortfolioPosition, RiskLimit, RiskEvent, ProviderHealth,
   FaceUser, FaceAuthResponse, OHLCVPoint
 } from "./types";
+import { getDeviceId, getDeviceToken, isLocalHost } from "./deviceAuth";
 
 const BASE = "/api/v1";
 
@@ -40,6 +41,8 @@ async function apiFetch<T>(path: string, options?: RequestInit, timeoutMs = 3000
   }, timeoutMs);
 
   let token = "";
+  const deviceHeaders: Record<string, string> = {};
+
   if (typeof window !== "undefined") {
     token = sessionStorage.getItem("stocksense_auth_token") || localStorage.getItem("stocksense_auth_token") || "";
     if (!token) {
@@ -51,6 +54,18 @@ async function apiFetch<T>(path: string, options?: RequestInit, timeoutMs = 3000
         } catch {}
       }
     }
+
+    try {
+      if (!isLocalHost()) {
+        // Only tag remote LAN devices — localhost is always auto-trusted by the backend
+        deviceHeaders["X-Client-Type"] = "remote-lan";
+        const devId = getDeviceId();
+        if (devId) deviceHeaders["X-Device-ID"] = devId;
+        const devTok = getDeviceToken();
+        if (devTok) deviceHeaders["X-Device-Token"] = devTok;
+      }
+      // Localhost: send NO device headers → middleware auto-approves the server host
+    } catch {}
   }
 
   const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
@@ -61,6 +76,7 @@ async function apiFetch<T>(path: string, options?: RequestInit, timeoutMs = 3000
       headers: {
         "Content-Type": "application/json",
         ...authHeaders,
+        ...deviceHeaders,
         ...(options?.headers ?? {}),
       },
       signal: options?.signal || controller.signal,
@@ -376,6 +392,16 @@ export const api = {
       apiFetch<{ success: boolean; message: string }>(`/auth/face-users/${userId}`, {
         method: "DELETE",
       }),
+    pinLogin: (data: { identifier: string; pin?: string }) =>
+      apiFetch<FaceAuthResponse>("/auth/pin-login", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    lanSignup: (data: { name: string; email?: string; role?: string; pin: string; admin_pin?: string }) =>
+      apiFetch<FaceAuthResponse>("/auth/lan-signup", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
   },
 
   // 11. Admin Panel & Enterprise Data Operations
@@ -425,6 +451,53 @@ export const api = {
       ),
     auditLogs: (limit = 25) =>
       apiFetch<import("./types").AdminAuditLog[]>(`/admin/audit-logs?limit=${limit}`),
+  },
+
+  // 11. LAN Server & Device Access Control
+  lan: {
+    getStatus: () => apiFetch<any>("/lan/status"),
+    checkDevice: (deviceId?: string) =>
+      apiFetch<any>(`/lan/devices/check${deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ""}`),
+    registerDevice: (name?: string) =>
+      apiFetch<any>("/lan/devices/register", {
+        method: "POST",
+        body: JSON.stringify({
+          device_identifier: getDeviceId(),
+          device_name: name || "Client Terminal",
+          user_agent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+        }),
+      }),
+    getDevices: () => apiFetch<any[]>("/lan/devices"),
+    getPendingDevices: () => apiFetch<any[]>("/lan/devices/pending"),
+    approveDevice: (deviceId: string) =>
+      apiFetch<{ success: boolean; status: string; token: string; message: string }>(
+        `/lan/devices/${encodeURIComponent(deviceId)}/approve`,
+        { method: "POST" }
+      ),
+    rejectDevice: (deviceId: string, reason?: string) =>
+      apiFetch<{ success: boolean; status: string; reason?: string }>(
+        `/lan/devices/${encodeURIComponent(deviceId)}/reject`,
+        { method: "POST", body: JSON.stringify({ reason }) }
+      ),
+    revokeDevice: (deviceId: string) =>
+      apiFetch<{ success: boolean; status: string; message: string }>(
+        `/lan/devices/${encodeURIComponent(deviceId)}/revoke`,
+        { method: "POST" }
+      ),
+    renameDevice: (deviceId: string, newName: string) =>
+      apiFetch<{ success: boolean; device_name: string }>(
+        `/lan/devices/${encodeURIComponent(deviceId)}`,
+        { method: "PATCH", body: JSON.stringify({ device_name: newName }) }
+      ),
+    deleteDevice: (deviceId: string) =>
+      apiFetch<{ success: boolean; message: string }>(
+        `/lan/devices/${encodeURIComponent(deviceId)}`,
+        { method: "DELETE" }
+      ),
+    getLogs: (limit = 50, action?: string, status?: string) =>
+      apiFetch<any[]>(
+        `/lan/access-logs?limit=${limit}${action ? `&action=${encodeURIComponent(action)}` : ""}${status ? `&status=${encodeURIComponent(status)}` : ""}`
+      ),
   },
 
   // Health

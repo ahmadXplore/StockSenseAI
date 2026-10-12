@@ -21,10 +21,23 @@ import { useMarket } from "@/lib/marketContext";
 export default function DashboardPage() {
   const router = useRouter();
   const { activeMarket, setActiveMarket, marketMeta } = useMarket();
+  const [authChecked, setAuthChecked] = useState(false);
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [providers, setProviders] = useState<ProviderHealth[]>([]);
   const [watchlistQuotes, setWatchlistQuotes] = useState<LiveQuote[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Auth guard — redirect immediately if not signed in (prevents dashboard flash)
+  useEffect(() => {
+    try {
+      const user = sessionStorage.getItem("stocksense_user");
+      if (!user) {
+        router.replace("/auth");
+        return;
+      }
+    } catch {}
+    setAuthChecked(true);
+  }, [router]);
 
   const loadDashboardData = useCallback(async () => {
     setLoading(true);
@@ -86,8 +99,13 @@ export default function DashboardPage() {
   }, [activeMarket, marketMeta]);
 
   useEffect(() => {
+    if (!authChecked) return;
     loadDashboardData();
-  }, [loadDashboardData]);
+  }, [loadDashboardData, authChecked]);
+
+  // Don't render anything until auth check is complete
+  if (!authChecked) return null;
+
 
   const regime = overview?.regime;
   const regimeColors: Record<string, string> = {

@@ -1,8 +1,9 @@
 """
-StockSense AI — Biometric Face Authentication Endpoints
-Stores and authenticates face embeddings in the PostgreSQL database.
+StockSense AI — Authentication Endpoints
+Supports face biometric and PIN-based authentication.
 """
 
+import hashlib
 import math
 import uuid
 from typing import List, Optional
@@ -14,7 +15,8 @@ from sqlalchemy import select, func, or_
 from app.db.session import get_db
 from app.models.portfolio import User
 from app.schemas.auth import (
-    FaceSignupRequest, FaceLoginRequest, FaceUserResponse, FaceAuthResponse
+    FaceSignupRequest, FaceLoginRequest, FaceUserResponse, FaceAuthResponse,
+    PinLoginRequest, LanSignupRequest
 )
 from app.core.logging import get_logger
 from app.core.security import create_access_token
@@ -71,12 +73,7 @@ async def face_signup(
 
     now = datetime.now(timezone.utc)
 
-    valid_admin_pins = ["admin2026", "9928", "stocksense_admin", "admin"]
     grant_admin = False
-    if payload.role == "admin" or (payload.admin_pin and payload.admin_pin.strip().lower() in valid_admin_pins):
-        grant_admin = True
-    elif "admin" in clean_username.lower() or "admin" in clean_email.lower():
-        grant_admin = True
 
     if user:
         # Update existing user's face profile
@@ -309,3 +306,221 @@ async def delete_face_user(user_id: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     return {"success": True, "message": f"Biometric enrollment removed for {user.full_name or user.email}."}
+
+
+def _hash_pin(pin: str) -> str:
+    """SHA-256 hash of a PIN string for storage in password_hash."""
+    return hashlib.sha256(pin.strip().encode("utf-8")).hexdigest()
+
+
+def _verify_pin(raw_pin: str, stored_hash: str) -> bool:
+    """Compare a raw PIN against a stored SHA-256 hash."""
+    return _hash_pin(raw_pin) == stored_hash
+
+
+@router.post("/pin-login", response_model=FaceAuthResponse, summary="PIN Login — works on all devices")
+async def pin_login(
+    payload: PinLoginRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Authenticates any user (local or LAN) via PIN verified against stored hash in password_hash.
+    """
+    ident = payload.identifier.strip().lower()
+    pin_val = (payload.pin or "").strip()
+
+    # Locate user by UUID, email, full_name, or username
+    user_id_obj = None
+    try:
+        user_id_obj = uuid.UUID(ident)
+    except Exception:
+        pass
+
+    stmt = select(User)
+    if user_id_obj:
+        stmt = stmt.where(User.id == user_id_obj)
+    else:
+        stmt = stmt.where(
+            or_(
+                func.lower(User.email) == ident,
+                func.lower(User.full_name) == ident,
+                func.lower(User.username) == ident,
+            )
+        )
+
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+
+    if not user:
+        return FaceAuthResponse(
+            success=False,
+            message=f"No account found for '{payload.identifier}'. Please sign up first.",
+            user=None,
+        )
+
+    if not user.is_active:
+        return FaceAuthResponse(
+            success=False,
+            message="Account is disabled by administrator.",
+            user=None,
+        )
+
+    if not pin_val:
+        return FaceAuthResponse(
+            success=False,
+            message="PIN is required to log in.",
+            user=None,
+        )
+
+    # PIN verification: check stored hash first, then master admin pins as fallback
+    pin_ok = False
+    stored_hash = getattr(user, "password_hash", None)
+    if stored_hash and stored_hash.startswith("pin:"):
+        # Format: "pin:<sha256hex>"
+        pin_ok = _verify_pin(pin_val, stored_hash[4:])
+    
+
+    if not pin_ok:
+        return FaceAuthResponse(
+            success=False,
+            message="Incorrect PIN. Please try again.",
+            user=None,
+        )
+
+    # Success — update last login
+    now = datetime.now(timezone.utc)
+    user.last_login_at = now
+    await db.commit()
+    await db.refresh(user)
+
+    user_resp = FaceUserResponse(
+        id=str(user.id),
+        name=user.full_name or user.username or "StockSense User",
+        email=user.email,
+        username=user.username,
+        role=getattr(user, "role", "user") or "user",
+        is_active=user.is_active,
+        is_admin=getattr(user, "is_admin", False) or False,
+        face_enrolled_at=user.face_enrolled_at,
+        last_login_at=user.last_login_at,
+        created_at=user.created_at,
+    )
+
+    jwt_token = create_access_token(
+        user_id=str(user.id),
+        name=user_resp.name,
+        email=user_resp.email,
+        is_admin=user_resp.is_admin,
+        role=user_resp.role,
+    )
+
+    return FaceAuthResponse(
+        success=True,
+        message=f"Access Granted. Welcome back, {user_resp.name}.",
+        token=jwt_token,
+        confidence_pct=100.0,
+        user=user_resp,
+    )
+
+
+@router.post("/lan-signup", response_model=FaceAuthResponse, summary="PIN Account Signup — works on all devices")
+async def lan_signup(
+    payload: LanSignupRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Registers a new user account with a PIN. No camera required.
+    PIN is stored as a SHA-256 hash in password_hash (prefixed with 'pin:').
+    """
+    clean_name = payload.name.strip()
+    clean_email = payload.email.strip().lower() if payload.email else f"{clean_name.lower().replace(' ', '_')}@stocksense.local"
+    clean_username = clean_name.lower().replace(' ', '_')
+
+    # Require a PIN for signup
+    user_pin = (payload.pin or "").strip()
+    if not user_pin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A PIN is required to create an account."
+        )
+    if len(user_pin) < 4:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PIN must be at least 4 characters."
+        )
+
+    pin_hash_stored = f"pin:{_hash_pin(user_pin)}"
+
+    # New signups cannot self-grant admin privileges
+    grant_admin = False
+
+    # Check if user already exists
+    stmt = select(User).where(
+        or_(
+            func.lower(User.email) == clean_email,
+            func.lower(User.full_name) == clean_name.lower(),
+            func.lower(User.username) == clean_username,
+        )
+    )
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+
+    now = datetime.now(timezone.utc)
+    if user:
+        # Update existing user — refresh PIN
+        user.full_name = clean_name
+        user.password_hash = pin_hash_stored
+        user.updated_at = now
+        if grant_admin:
+            user.role = "admin"
+            user.is_admin = True
+        logger.info(f"Updated PIN for existing user: {clean_name}")
+    else:
+        # Create new user with PIN
+        user = User(
+            id=uuid.uuid4(),
+            email=clean_email,
+            username=clean_username,
+            full_name=clean_name,
+            role="user",
+            is_admin=False,
+            password_hash=pin_hash_stored,
+            email_verified=True,
+            created_at=now,
+            updated_at=now,
+            last_login_at=now,
+        )
+        db.add(user)
+        logger.info(f"Created new PIN user: {clean_name}")
+
+    await db.commit()
+    await db.refresh(user)
+
+    user_resp = FaceUserResponse(
+        id=str(user.id),
+        name=user.full_name or user.username or "StockSense User",
+        email=user.email,
+        username=user.username,
+        role=getattr(user, "role", "user") or "user",
+        is_active=user.is_active,
+        is_admin=getattr(user, "is_admin", False) or False,
+        face_enrolled_at=user.face_enrolled_at,
+        last_login_at=user.last_login_at,
+        created_at=user.created_at,
+    )
+
+    jwt_token = create_access_token(
+        user_id=str(user.id),
+        name=user_resp.name,
+        email=user_resp.email,
+        is_admin=user_resp.is_admin,
+        role=user_resp.role,
+    )
+
+    return FaceAuthResponse(
+        success=True,
+        message=f"Account created for {clean_name}. You can now log in.",
+        token=jwt_token,
+        confidence_pct=100.0,
+        user=user_resp,
+    )

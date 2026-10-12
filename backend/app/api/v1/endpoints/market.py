@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.core import db_cache
 from app.schemas.market import RegimeResponse, MarketOverviewResponse, TickerSearchResult
 from app.core.live_data import (
     fetch_yfinance_quote,
@@ -112,6 +113,15 @@ async def get_market_overview(db: AsyncSession = Depends(get_db)):
     fed_rate   = macro.get("fed_funds_rate") or 5.25
     macro_score = round(100 - (vix * 2) + (fed_rate * 0.5), 1)
     macro_score = max(0, min(100, macro_score))
+
+    # Persist live overview quotes to database
+    try:
+        if spy_data and spy_data.get("price"):
+            await db_cache.save_live_quote(spy_data, db=db)
+        if qqq_data and qqq_data.get("price"):
+            await db_cache.save_live_quote(qqq_data, db=db)
+    except Exception as exc:
+        logger.warning(f"[MARKET] Failed to persist overview quotes: {exc}")
 
     return MarketOverviewResponse(
         timestamp=datetime.utcnow(),
@@ -293,6 +303,13 @@ async def get_live_quote(ticker: str, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Could not fetch live data for ticker '{ticker}'."
         )
+
+    # Persist live quote and metadata to SQLite/PostgreSQL
+    try:
+        await db_cache.save_live_quote(snapshot, db=db)
+    except Exception as exc:
+        logger.warning(f"[MARKET] Live quote persistence failed for {ticker}: {exc}")
+
     return snapshot
 
 
@@ -307,6 +324,14 @@ async def get_ticker_news(ticker: str, days: int = 7, db: AsyncSession = Depends
         fetch_finnhub_news(ticker, days_back=days),
         fetch_finnhub_sentiment(ticker),
     )
+
+    # Persist news to SQLite/PostgreSQL
+    if news:
+        try:
+            await db_cache.save_news_items(ticker, news, db=db)
+        except Exception as exc:
+            logger.warning(f"[MARKET] News persistence failed for {ticker}: {exc}")
+
     return {
         "ticker": ticker,
         "news": news,
@@ -429,6 +454,20 @@ async def get_price_history(
                 "volume": int(p.volume or 0),
             })
 
+    # Persist fetched historical bars to database asynchronously
+    if history:
+        try:
+            await db_cache.upsert_historical_prices(
+                ticker=clean_sym,
+                prices=history,
+                market=market_code,
+                exchange=exchange_code,
+                currency="PKR" if market_code == "PK" else "GBP" if market_code == "UK" else "USD",
+                db=db
+            )
+        except Exception as exc:
+            logger.warning(f"[MARKET] Historical price persistence failed for {clean_sym}: {exc}")
+
     return {
         "ticker": clean_sym,
         "market_code": market_code,
@@ -468,8 +507,16 @@ async def get_earnings_calendar(ticker: str):
 # Insider Transactions — Finnhub
 # ─────────────────────────────────────────────────────────
 @router.get("/insiders/{ticker}", summary="Get insider transactions")
-async def get_insider_transactions(ticker: str):
+async def get_insider_transactions(ticker: str, db: AsyncSession = Depends(get_db)):
     """Returns recent insider buy/sell transactions from Finnhub."""
     ticker = ticker.strip().upper()
     data = await fetch_finnhub_insider_transactions(ticker)
+
+    # Persist insider transactions to SQLite/PostgreSQL
+    if data:
+        try:
+            await db_cache.save_insider_transactions(ticker, data, db=db)
+        except Exception as exc:
+            logger.warning(f"[MARKET] Insider transactions persistence failed for {ticker}: {exc}")
+
     return {"ticker": ticker, "transactions": data, "source": "Finnhub"}

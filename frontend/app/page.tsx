@@ -11,7 +11,7 @@ export default function Home() {
   const [subText, setSubText] = useState("Loading neural biometric weights & market context engines");
 
   useEffect(() => {
-    // Check if user is already authenticated
+    // Check auth immediately — no bootloader delay for authenticated users
     let hasUser = false;
     try {
       if (typeof window !== "undefined") {
@@ -20,7 +20,13 @@ export default function Home() {
       }
     } catch {}
 
-    // Stepped bootloader simulation
+    // If already authenticated, skip the bootloader entirely
+    if (hasUser) {
+      router.replace("/dashboard");
+      return;
+    }
+
+    // Not authenticated: run the bootloader and redirect to auth
     const timer1 = setTimeout(() => {
       setProgress(25);
       setStatusText("CONNECTING MULTI-MARKET PRICE FEEDS…");
@@ -42,11 +48,7 @@ export default function Home() {
     const timer4 = setTimeout(() => {
       setProgress(100);
       setTimeout(() => {
-        if (hasUser) {
-          router.replace("/dashboard");
-        } else {
-          router.replace("/auth");
-        }
+        router.replace("/auth");
       }, 400);
     }, 1900);
 
@@ -59,7 +61,7 @@ export default function Home() {
   }, [router]);
 
   return (
-    <div className="min-h-[85vh] text-white flex flex-col items-center justify-center p-6 relative overflow-hidden select-none">
+    <div className="min-h-screen text-white flex flex-col items-center justify-center p-6 relative overflow-hidden select-none">
       {/* Dynamic Background Glows */}
       <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[450px] h-[450px] bg-gradient-to-tr from-brand/20 to-teal-500/10 rounded-full blur-[100px] pointer-events-none" />
       <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#1E293B_1px,transparent_1px)] [background-size:24px_24px] pointer-events-none" />

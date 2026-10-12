@@ -101,6 +101,20 @@ export default function SettingsPage() {
             View details <ExternalLink className="h-3 w-3" />
           </Link>
         </div>
+
+        {/* LAN Server & Controlled Device Access */}
+        <div className="pt-2 border-t border-border flex items-center justify-between text-xs">
+          <div className="space-y-0.5">
+            <span className="text-gray-300 font-semibold flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              LAN Server &amp; Controlled Device Access
+            </span>
+            <p className="text-gray-500 text-[11px]">Connect mobile devices on local Wi-Fi without Docker</p>
+          </div>
+          <Link href="/settings/lan" className="text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold">
+            Manage Access <ExternalLink className="h-3 w-3" />
+          </Link>
+        </div>
       </div>
     </div>
   );

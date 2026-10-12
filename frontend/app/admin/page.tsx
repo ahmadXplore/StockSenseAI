@@ -7,7 +7,7 @@ import {
   UserCheck, Trash2, Edit3, Upload, RefreshCw, Search,
   AlertTriangle, CheckCircle2, XCircle, FileText, Download,
   Layers, Lock, Unlock, Server, HardDrive, Terminal, Loader2,
-  Check, ArrowRight
+  Check, ArrowRight, Wifi, Smartphone, Laptop, Radio, Copy, Key
 } from "lucide-react";
 import { api, AdminUser, AdminStats, AdminAuditLog } from "@/lib/api";
 import { BackButton } from "@/components/BackButton";
@@ -25,7 +25,18 @@ export default function AdminDashboardPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"users" | "data" | "audit">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "data" | "audit" | "lan">("users");
+
+  // LAN Server & Device Access State
+  const [lanStatus, setLanStatus] = useState<any | null>(null);
+  const [lanDevices, setLanDevices] = useState<any[]>([]);
+  const [lanPendingDevices, setLanPendingDevices] = useState<any[]>([]);
+  const [lanLogs, setLanLogs] = useState<any[]>([]);
+  const [lanLoading, setLanLoading] = useState(false);
+  const [lanActionNotice, setLanActionNotice] = useState<{ type: "ok" | "err"; message: string } | null>(null);
+  const [showTokenModal, setShowTokenModal] = useState<{ deviceName: string; token: string } | null>(null);
+  const [showRenameModal, setShowRenameModal] = useState<{ deviceId: string; name: string } | null>(null);
+  const [copiedLanUrl, setCopiedLanUrl] = useState(false);
 
   // Filter & Search
   const [searchQuery, setSearchQuery] = useState("");
@@ -115,10 +126,106 @@ export default function AdminDashboardPage() {
       if (s.status === "fulfilled") setStats(s.value);
       if (u.status === "fulfilled") setUsers(u.value);
       if (a.status === "fulfilled") setAuditLogs(a.value);
+
+      // Also refresh LAN data
+      await loadLanData();
     } catch (e: any) {
       console.error("Admin load error:", e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadLanData = async () => {
+    setLanLoading(true);
+    try {
+      const [st, devs, pend, logs] = await Promise.allSettled([
+        api.lan.getStatus(),
+        api.lan.getDevices(),
+        api.lan.getPendingDevices(),
+        api.lan.getLogs(50),
+      ]);
+      if (st.status === "fulfilled") setLanStatus(st.value);
+      if (devs.status === "fulfilled") setLanDevices(devs.value);
+      if (pend.status === "fulfilled") setLanPendingDevices(pend.value);
+      if (logs.status === "fulfilled") setLanLogs(logs.value);
+    } catch (e: any) {
+      console.error("LAN data load error:", e);
+    } finally {
+      setLanLoading(false);
+    }
+  };
+
+  const handleApproveDevice = async (deviceId: string, deviceName: string) => {
+    try {
+      const res = await api.lan.approveDevice(deviceId);
+      setLanActionNotice({
+        type: "ok",
+        message: `Device '${deviceName}' successfully approved. Access token generated.`,
+      });
+      if (res.token) {
+        setShowTokenModal({ deviceName, token: res.token });
+      }
+      await loadLanData();
+    } catch (err: any) {
+      setLanActionNotice({ type: "err", message: err.message || "Failed to approve device." });
+    }
+  };
+
+  const handleRejectDevice = async (deviceId: string) => {
+    const reason = prompt("Enter optional rejection reason:", "Access declined by administrator");
+    if (reason === null) return;
+    try {
+      await api.lan.rejectDevice(deviceId, reason);
+      setLanActionNotice({
+        type: "ok",
+        message: "Device request rejected.",
+      });
+      await loadLanData();
+    } catch (err: any) {
+      setLanActionNotice({ type: "err", message: err.message || "Failed to reject device." });
+    }
+  };
+
+  const handleRevokeDevice = async (deviceId: string, deviceName: string) => {
+    if (!confirm(`Are you sure you want to revoke access for '${deviceName}'? The device will be immediately disconnected.`)) return;
+    try {
+      await api.lan.revokeDevice(deviceId);
+      setLanActionNotice({
+        type: "ok",
+        message: `Device '${deviceName}' access revoked.`,
+      });
+      await loadLanData();
+    } catch (err: any) {
+      setLanActionNotice({ type: "err", message: err.message || "Failed to revoke device access." });
+    }
+  };
+
+  const handleRenameDevice = async (deviceId: string, newName: string) => {
+    try {
+      await api.lan.renameDevice(deviceId, newName);
+      setLanActionNotice({
+        type: "ok",
+        message: "Device renamed successfully.",
+      });
+      setShowRenameModal(null);
+      await loadLanData();
+    } catch (err: any) {
+      setLanActionNotice({ type: "err", message: err.message || "Failed to rename device." });
+    }
+  };
+
+  const handleDeleteDevice = async (deviceId: string, deviceName: string) => {
+    if (!confirm(`Permanently remove device '${deviceName}' and its audit history?`)) return;
+    try {
+      await api.lan.deleteDevice(deviceId);
+      setLanActionNotice({
+        type: "ok",
+        message: `Device '${deviceName}' removed permanently.`,
+      });
+      await loadLanData();
+    } catch (err: any) {
+      setLanActionNotice({ type: "err", message: err.message || "Failed to delete device." });
     }
   };
 
@@ -495,6 +602,26 @@ export default function AdminDashboardPage() {
           <Terminal className="h-4 w-4" />
           <span>Audit Logs &amp; Activity</span>
         </button>
+
+        <button
+          onClick={() => {
+            setActiveTab("lan");
+            loadLanData();
+          }}
+          className={`flex items-center gap-2 px-4 py-2.5 border-b-2 text-xs font-semibold transition-colors ${
+            activeTab === "lan"
+              ? "border-emerald-500 text-emerald-400 bg-emerald-500/5"
+              : "border-transparent text-gray-400 hover:text-white"
+          }`}
+        >
+          <Wifi className="h-4 w-4" />
+          <span>LAN Access &amp; Devices</span>
+          {lanPendingDevices.length > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-[10px] text-amber-300 font-bold animate-pulse">
+              {lanPendingDevices.length} pending
+            </span>
+          )}
+        </button>
       </div>
 
       {/* TAB 1: USER MANAGEMENT */}
@@ -831,6 +958,468 @@ export default function AdminDashboardPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* TAB 4: LAN ACCESS & CONTROLLED DEVICE ACCESS */}
+      {activeTab === "lan" && (
+        <div className="space-y-6">
+          {/* LAN Notification Banner */}
+          {lanActionNotice && (
+            <div
+              className={`flex items-center justify-between p-3.5 rounded-xl border text-xs font-mono animate-fadeIn ${
+                lanActionNotice.type === "ok"
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                  : "bg-red-500/10 border-red-500/30 text-red-300"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {lanActionNotice.type === "ok" ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+                <span>{lanActionNotice.message}</span>
+              </div>
+              <button onClick={() => setLanActionNotice(null)} className="text-gray-400 hover:text-white">✕</button>
+            </div>
+          )}
+
+          {/* Server Network Overview Card */}
+          <div className="bg-[#0B0F19] border border-border/80 rounded-2xl p-6 shadow-xl space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border/50 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                  <Wifi className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-white flex items-center gap-2">
+                    <span>Windows Native LAN Server</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                      LIVE
+                    </span>
+                  </h2>
+                  <p className="text-xs text-gray-400">
+                    Host machine serving StockSense AI directly to authorized local network devices without Docker.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={loadLanData}
+                  disabled={lanLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-background-elevated border border-border text-xs text-gray-300 hover:text-white transition-colors"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${lanLoading ? "animate-spin text-brand" : ""}`} />
+                  <span>Refresh LAN</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Network Endpoints & Stats Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-mono">
+              <div className="p-4 rounded-xl bg-[#080B13] border border-border/60 space-y-1.5">
+                <div className="text-gray-400 font-sans flex items-center justify-between">
+                  <span>Server LAN Address</span>
+                  <Radio className="h-3.5 w-3.5 text-emerald-400" />
+                </div>
+                <div className="text-base font-extrabold text-white">
+                  {lanStatus?.host_ip || "Detecting..."}
+                </div>
+                <div className="flex items-center justify-between pt-1 font-sans">
+                  <span className="text-[11px] text-gray-500">Port 3005 (Unified Web)</span>
+                  <button
+                    onClick={() => {
+                      if (lanStatus?.lan_access_url) {
+                        navigator.clipboard.writeText(lanStatus.lan_access_url);
+                        setCopiedLanUrl(true);
+                        setTimeout(() => setCopiedLanUrl(false), 2000);
+                      }
+                    }}
+                    className="text-[11px] text-brand hover:text-brand-hover flex items-center gap-1 font-mono"
+                  >
+                    <Copy className="h-3 w-3" />
+                    <span>{copiedLanUrl ? "Copied!" : "Copy URL"}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-[#080B13] border border-border/60 space-y-1.5">
+                <div className="text-gray-400 font-sans flex items-center justify-between">
+                  <span>Perimeter Security Gate</span>
+                  <Shield className="h-3.5 w-3.5 text-brand" />
+                </div>
+                <div className="text-base font-extrabold text-emerald-400 flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>Device Auth Enforced</span>
+                </div>
+                <div className="text-[11px] text-gray-500 font-sans">
+                  Host Loopback: Auto-Approved
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-[#080B13] border border-border/60 space-y-1.5">
+                <div className="text-gray-400 font-sans flex items-center justify-between">
+                  <span>Engine Health</span>
+                  <Server className="h-3.5 w-3.5 text-blue-400" />
+                </div>
+                <div className="text-xs text-gray-300 space-y-0.5">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Database:</span>
+                    <span className="text-emerald-400 capitalize">{lanStatus?.components?.database || "Connected"}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">ML Engine:</span>
+                    <span className="text-emerald-400 capitalize">{lanStatus?.components?.ml_engine || "Ready"}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Backtesting:</span>
+                    <span className="text-emerald-400 capitalize">{lanStatus?.components?.backtesting_engine || "Ready"}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Section: Pending Device Approvals */}
+          <div className="bg-[#0B0F19] border border-border/80 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-border/50 pb-3">
+              <div className="flex items-center gap-2">
+                <Smartphone className="h-4 w-4 text-amber-400" />
+                <h3 className="text-sm font-bold text-white">
+                  Pending Authorization Requests
+                </h3>
+                {lanPendingDevices.length > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
+                    {lanPendingDevices.length} Awaiting Action
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {lanPendingDevices.length === 0 ? (
+              <div className="p-8 text-center rounded-xl bg-[#080B13] border border-border/50 space-y-2">
+                <CheckCircle2 className="h-8 w-8 text-emerald-400/80 mx-auto" />
+                <p className="text-sm text-gray-300 font-medium">All Connected Devices Approved</p>
+                <p className="text-xs text-gray-500 max-w-md mx-auto">
+                  When a smartphone, tablet, or secondary laptop connects to <span className="text-gray-300 font-mono">{lanStatus?.lan_access_url || "http://<LAN_IP>:3005"}</span>, it will appear here for instant one-click authorization.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {lanPendingDevices.map((d) => (
+                  <div
+                    key={d.id}
+                    className="p-4 rounded-xl bg-[#080B13] border border-amber-500/40 space-y-3 shadow-lg shadow-amber-500/5 relative overflow-hidden"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-0.5">
+                        <div className="text-sm font-bold text-white flex items-center gap-2">
+                          <span>{d.device_name}</span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-500/20 text-amber-300 font-bold">
+                            PENDING
+                          </span>
+                        </div>
+                        <div className="text-xs font-mono text-gray-400">
+                          IP: <span className="text-gray-200">{d.current_ip}</span>
+                        </div>
+                        <div className="text-[11px] font-mono text-gray-500 truncate max-w-xs">
+                          ID: {d.device_identifier}
+                        </div>
+                        <div className="text-[10px] text-gray-500">
+                          Requested: {new Date(d.created_at).toLocaleTimeString()} · {new Date(d.created_at).toLocaleDateString()}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-border/40 flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => handleRejectDevice(d.device_identifier)}
+                        className="px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 text-xs font-semibold transition-colors flex items-center gap-1"
+                      >
+                        <XCircle className="h-3.5 w-3.5" />
+                        <span>Reject</span>
+                      </button>
+                      <button
+                        onClick={() => handleApproveDevice(d.device_identifier, d.device_name)}
+                        className="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold transition-all shadow-md shadow-emerald-500/20 flex items-center gap-1.5"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                        <span>Approve Device</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Section: All Registered LAN Devices */}
+          <div className="bg-[#0B0F19] border border-border/80 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-border/50 pb-3">
+              <div className="flex items-center gap-2">
+                <Laptop className="h-4 w-4 text-brand" />
+                <h3 className="text-sm font-bold text-white">Registered LAN Devices</h3>
+                <span className="text-xs text-gray-500 font-mono">({lanDevices.length} total)</span>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border border-border/60">
+              <table className="w-full text-left text-xs font-mono">
+                <thead className="bg-[#090D17] text-gray-400 border-b border-border/50">
+                  <tr>
+                    <th className="py-3 px-4">Device Name</th>
+                    <th className="py-3 px-3">Role</th>
+                    <th className="py-3 px-3">IP Address</th>
+                    <th className="py-3 px-3">Device Fingerprint</th>
+                    <th className="py-3 px-3">Status</th>
+                    <th className="py-3 px-3">Last Seen</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/20">
+                  {lanDevices.map((d) => (
+                    <tr key={d.id} className="hover:bg-white/[0.02] transition-colors">
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2 font-sans font-bold text-white">
+                          <span>{d.device_name}</span>
+                          {!d.is_server_host && (
+                            <button
+                              onClick={() => setShowRenameModal({ deviceId: d.device_identifier, name: d.device_name })}
+                              className="text-gray-500 hover:text-gray-300 p-0.5"
+                              title="Rename Device"
+                            >
+                              <Edit3 className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3 px-3">
+                        {d.is_server_host ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/15 text-blue-400 border border-blue-500/30">
+                            Host Server
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-500/15 text-gray-400 border border-gray-500/30">
+                            LAN Client
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-3 text-gray-300">{d.current_ip}</td>
+                      <td className="py-3 px-3 text-gray-400">
+                        <div className="flex items-center gap-1">
+                          <span>{d.device_identifier.substring(0, 12)}...</span>
+                          <button
+                            onClick={() => navigator.clipboard.writeText(d.device_identifier)}
+                            className="text-gray-500 hover:text-gray-300 p-0.5"
+                            title="Copy Device ID"
+                          >
+                            <Copy className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="py-3 px-3">
+                        {d.status === "APPROVED" && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                            APPROVED
+                          </span>
+                        )}
+                        {d.status === "PENDING" && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                            PENDING
+                          </span>
+                        )}
+                        {d.status === "REVOKED" && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-500/15 text-red-400 border border-red-500/30">
+                            REVOKED
+                          </span>
+                        )}
+                        {d.status === "REJECTED" && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-500/15 text-gray-400 border border-gray-500/30">
+                            REJECTED
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-3 text-gray-400 text-[11px]">
+                        {new Date(d.last_seen_at).toLocaleTimeString()}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        {!d.is_server_host && (
+                          <div className="flex items-center justify-end gap-1.5">
+                            {d.status === "APPROVED" ? (
+                              <button
+                                onClick={() => handleRevokeDevice(d.device_identifier, d.device_name)}
+                                className="px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-[11px] font-semibold border border-amber-500/30 transition-colors"
+                              >
+                                Revoke
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleApproveDevice(d.device_identifier, d.device_name)}
+                                className="px-2.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-[11px] font-semibold border border-emerald-500/30 transition-colors"
+                              >
+                                Re-Approve
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleDeleteDevice(d.device_identifier, d.device_name)}
+                              className="p-1 rounded-lg text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                              title="Delete Device Record"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Section: Live LAN Security Audit Stream */}
+          <div className="bg-[#0B0F19] border border-border/80 rounded-2xl p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-border/50 pb-3">
+              <div className="flex items-center gap-2">
+                <Terminal className="h-4 w-4 text-emerald-400" />
+                <h3 className="text-sm font-bold text-white">LAN Security Audit Log Stream</h3>
+              </div>
+              <span className="text-[11px] text-gray-500 font-mono">Recent 50 Events</span>
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border border-border/60 max-h-96">
+              <table className="w-full text-left text-xs font-mono">
+                <thead className="bg-[#090D17] text-gray-400 sticky top-0 border-b border-border/50">
+                  <tr>
+                    <th className="py-2.5 px-4">Timestamp</th>
+                    <th className="py-2.5 px-3">Action</th>
+                    <th className="py-2.5 px-3">IP Address</th>
+                    <th className="py-2.5 px-3">Device / ID</th>
+                    <th className="py-2.5 px-3">Status</th>
+                    <th className="py-2.5 px-4">Event Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/20">
+                  {lanLogs.map((l) => (
+                    <tr key={l.id} className="hover:bg-white/[0.02] transition-colors">
+                      <td className="py-2.5 px-4 text-gray-400 text-[11px]">
+                        {new Date(l.timestamp).toLocaleTimeString()} · {new Date(l.timestamp).toLocaleDateString()}
+                      </td>
+                      <td className="py-2.5 px-3 font-bold text-white text-[11px]">{l.action}</td>
+                      <td className="py-2.5 px-3 text-emerald-400">{l.ip_address}</td>
+                      <td className="py-2.5 px-3 text-gray-400 text-[11px] truncate max-w-[120px]">
+                        {l.device_identifier || "—"}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            l.status === "SUCCESS"
+                              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                              : l.status === "BLOCKED"
+                              ? "bg-red-500/10 text-red-400 border border-red-500/20"
+                              : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                          }`}
+                        >
+                          {l.status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-4 text-gray-400 max-w-sm truncate text-[11px]">
+                        {l.details || l.endpoint}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: DEVICE TOKEN ISSUED */}
+      {showTokenModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/75 backdrop-blur-sm" onClick={() => setShowTokenModal(null)} />
+          <div className="relative bg-[#0E1422] border border-emerald-500/40 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4 text-xs z-10 font-sans">
+            <div className="flex items-center gap-3 text-emerald-400">
+              <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                <Key className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Device Access Token Issued</h3>
+                <p className="text-xs text-gray-400">Approved: {showTokenModal.deviceName}</p>
+              </div>
+            </div>
+
+            <p className="text-gray-300 leading-relaxed">
+              The secret authorization token has been issued. If the connecting device is on the pending screen, it will detect this approval and unlock automatically.
+            </p>
+
+            <div className="p-3 bg-[#080B13] border border-border/80 rounded-xl space-y-1 font-mono">
+              <div className="text-[10px] text-gray-400">Device Token:</div>
+              <div className="text-emerald-400 font-bold break-all">{showTokenModal.token}</div>
+            </div>
+
+            <div className="pt-2 flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(showTokenModal.token);
+                  setShowTokenModal(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold flex items-center gap-1.5 shadow-lg shadow-emerald-500/20"
+              >
+                <Check className="h-3.5 w-3.5" />
+                <span>Copy &amp; Done</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: RENAME DEVICE */}
+      {showRenameModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/75 backdrop-blur-sm" onClick={() => setShowRenameModal(null)} />
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleRenameDevice(showRenameModal.deviceId, showRenameModal.name);
+            }}
+            className="relative bg-[#0E1422] border border-border rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4 text-xs z-10 font-sans"
+          >
+            <div className="flex items-center justify-between border-b border-border/50 pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Edit3 className="h-4 w-4 text-brand" /> Rename LAN Device
+              </h3>
+              <button type="button" onClick={() => setShowRenameModal(null)} className="text-gray-500 hover:text-white">✕</button>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] text-gray-400 font-mono">Device Name</label>
+              <input
+                type="text"
+                value={showRenameModal.name}
+                onChange={(e) => setShowRenameModal({ ...showRenameModal, name: e.target.value })}
+                className="w-full bg-[#12192C] border border-border rounded-xl p-2.5 text-white"
+                required
+                minLength={2}
+                maxLength={100}
+              />
+            </div>
+
+            <div className="pt-3 flex justify-end gap-2 border-t border-border/50">
+              <button
+                type="button"
+                onClick={() => setShowRenameModal(null)}
+                className="px-4 py-2 rounded-xl bg-background-elevated border border-border text-gray-400 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-brand hover:bg-brand-hover text-white font-bold"
+              >
+                Save
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
