@@ -15,7 +15,8 @@ import {
 } from "./types";
 import { getDeviceId, getDeviceToken, isLocalHost } from "./deviceAuth";
 
-const BASE = "/api/v1";
+const BASE =
+  process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
 // Lightweight in-memory client cache
 const _CLIENT_CACHE: Record<string, { timestamp: number; data: any }> = {};
